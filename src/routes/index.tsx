@@ -222,18 +222,20 @@ function inclusiveP85(values:number[]):number|null {
 function numeric(v:unknown):number|null { const n=Number(str(v).replace(",","."));return str(v)!==""&&Number.isFinite(n)?n:null; }
 function buildFlowSeries(rows:Row[], calendar:Row[], baseStats:ReturnType<typeof calculate>) {
   const eventBySprint=new Map(calendar.map(r=>[str(r["Sprint"]),r]));
+  const allLead=rows.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
+  const overallP85=inclusiveP85(allLead);
   return SPRINT_OPTIONS.map((sprint,i)=>{
     const items=rows.filter(r=>str(r["Sprint"])===sprint);
-    const completed=items.filter(r=>!!str(r["Concluído"]));
-    const leadValues=items.map(r=>numeric(r["Lead time (dias corridos)"])).filter((v):v is number=>v!==null&&v>=0);
-    const cycleValues=items.map(r=>numeric(r["Cycle time (dias corridos)"])).filter((v):v is number=>v!==null&&v>=0);
+    const completed=items.filter(r=>!!str(r["Concluído"]||r["Resolution Date"])||completedDefaults.some(s=>normalize(s)===normalize(r["Issue Status"])));
+    const leadValues=items.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
+    const cycleValues=items.map(r=>numeric(r["Cycle time (dias corridos)"])??elapsedDays(r["In development"]??r["Development Start Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
     const noReopen=items.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
     const reopened=items.filter(r=>(numeric(r["Reaberturas"])??0)>0).length;
     const lead=leadValues.length?leadValues.reduce((a,b)=>a+b,0)/leadValues.length:null;
     const cycle=cycleValues.length?cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length:null;
     const velocity=completed.reduce((sum,r)=>sum+(numeric(r["Story Points"])??0),0);
     const ev=eventBySprint.get(sprint);
-    return {sprint,sprintIndex:i+1,totalItems:items.length,noReopen,reopened,leadTime:lead,leadP85:inclusiveP85(leadValues),cycleTime:cycle,efficiency:lead!==null&&lead>0&&cycle!==null?(cycle/lead)*100:null,velocity,phase:str(ev?.["Fase"]),context:str(ev?.["Evento / contexto"]),leadCount:leadValues.length,cycleCount:cycleValues.length,throughput:noReopen+reopened};
+    return {sprint,sprintIndex:i+1,totalItems:items.length,noReopen,reopened,leadTime:lead,leadP85:inclusiveP85(leadValues),cycleTime:cycle,efficiency:lead!==null&&lead>0&&cycle!==null?(cycle/lead)*100:null,velocity,phase:str(ev?.["Fase"]),context:str(ev?.["Evento / contexto"]),leadP85General:overallP85,leadCount:leadValues.length,cycleCount:cycleValues.length,throughput:noReopen+reopened};
   });
 }
 function FlowTooltip({active,payload,label}:any) {
@@ -259,7 +261,7 @@ function FlowChart({title,description,data,kind,unavailable}:{title:string;descr
   return <section className="ap-chart-card ap-metric-card">
     <div className="ap-chart-heading"><div><div className="ap-chart-title"><Activity size={19}/><h2>{title}</h2></div><p>{description}</p></div></div>
     {kind==="throughput"&&<div className="ap-summary ap-flow-cards"><div><span>TOTAL DE ITENS</span><strong>{total}<small> itens</small></strong></div><div><span>MÉDIA POR SPRINT</span><strong>{(total/20).toFixed(1)}<small> itens</small></strong></div><div><span>THROUGHPUT LÍQUIDO MÉDIO · ÚLTIMAS 3</span><strong>{netLast3.toFixed(1)}<small> itens</small></strong></div></div>}
-    {kind==="leadTime"&&<div className="ap-summary ap-flow-cards"><div><span>MÉDIA GERAL</span><strong>{leadValues.length?(leadValues.reduce((a,b)=>a+b,0)/leadValues.length).toFixed(1):"—"}<small> dias corridos</small></strong></div><div><span>P85 GERAL · INCLUSIVO</span><strong>{p85===null?"—":p85.toFixed(1)}<small> dias corridos</small></strong></div></div>}
+    {kind==="leadTime"&&<div className="ap-summary ap-flow-cards"><div><span>MÉDIA GERAL</span><strong>{leadValues.length?(leadValues.reduce((a,b)=>a+b,0)/leadValues.length).toFixed(1):"—"}<small> dias corridos</small></strong></div><div><span>P85 GERAL · INCLUSIVO</span><strong>{data[0]?.leadP85General==null?"—":data[0].leadP85General.toFixed(1)}<small> dias corridos</small></strong></div></div>}
     {hasValues?<div className="ap-chart-scroll"><div className="ap-chart-inner" style={{width:Math.max(980,data.length*58),height:340}}><ResponsiveContainer width="100%" height={330}><ComposedChart data={data} margin={{top:18,right:20,left:0,bottom:8}}>
       <CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/>
       <XAxis dataKey="sprint" tick={{fill:"#91a4c4",fontSize:10}} axisLine={{stroke:"#31435f"}} tickLine={false} interval={0}/>
@@ -404,5 +406,6 @@ function AgilePulse() {
     <div className="ap-chart-footer"><span>Fonte: {source==="demo"?"dados fictícios":fileName}</span><span>Faixas de fase e eventos usam Calendario_Eventos.</span></div>
     <InlineAssistant metricKey="throughput" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName}/>
     </>}
-
+    </div></section>
+  </main>;
 }
