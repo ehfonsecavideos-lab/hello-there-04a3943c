@@ -427,3 +427,40 @@ body { margin:0; }
  .ap-bd-wait-card { width:100%;box-sizing:border-box; }
  .ap-bd-chart-card { padding:13px; }
 }
+
+
+/* Decision and risk planning */
+.ap-decision-page { margin-top:14px;display:flex;flex-direction:column;gap:16px; }
+.ap-decision-section { padding:19px;min-width:0; }
+.ap-decision-note { padding:17px 19px; }
+.ap-decision-note strong { color:#e5edfb;font-size:12px; }
+.ap-decision-note p { color:#91a4c4;font-size:11px;line-height:1.7;margin:7px 0 0; }
+.ap-decision-pill { display:inline-flex;align-items:center;justify-content:center;border:1px solid #344967;background:#111f35;color:#c6d7f0;border-radius:20px;padding:7px 10px;font-size:10px;white-space:nowrap; }
+.ap-decision-scenario-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:15px; }
+.ap-decision-scenario { min-width:0;padding:16px;border:1px solid #2a3e5d;border-radius:12px;background:linear-gradient(145deg,#12213a,#0d192c); }
+.ap-decision-scenario>span { display:block;color:#91a4c4;font-size:9px;font-weight:800;letter-spacing:.08em; }
+.ap-decision-scenario>strong { display:block;color:#f1f6ff;font-size:25px;margin:8px 0; }
+.ap-decision-scenario>small { display:block;color:#a8bad5;font-size:10px;line-height:1.6; }
+.ap-decision-scenario>div { color:#91a4c4;font-size:10px;line-height:1.6;margin-top:9px; }
+.ap-decision-scenario .ap-decision-date { color:#93c5fd;border-top:1px solid #2a3e5d;padding-top:10px; }
+.ap-decision-edit-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin:15px 0; }
+.ap-decision-edit-grid label { display:flex;flex-direction:column;gap:8px;min-width:0;padding:14px;border:1px solid #2a3e5d;border-radius:10px;background:#101e33; }
+.ap-decision-edit-grid label>span { color:#d8e5f7;font-size:11px;font-weight:700; }
+.ap-decision-edit-grid input { width:100%;box-sizing:border-box;border:1px solid #354967;border-radius:8px;background:#0b1729;color:#f1f6ff;padding:10px 11px;font:inherit;font-size:12px;outline:none; }
+.ap-decision-edit-grid input:focus { border-color:#7b83ff;box-shadow:0 0 0 2px #7b83ff22; }
+.ap-decision-edit-grid small { color:#8297b7;font-size:9px;line-height:1.6; }
+.ap-decision-meta { color:#91a4c4;font-size:10px;line-height:1.8;margin:0 0 12px; }
+.ap-decision-meta strong { color:#d9e7fb; }
+.ap-decision-table { max-height:480px;overflow:auto; }
+.ap-decision-table table { width:100%;min-width:1060px;border-collapse:collapse; }
+.ap-decision-table th { position:sticky;top:0;z-index:1;background:#14233a;color:#91a4c4;font-size:10px;text-align:left;padding:11px;white-space:nowrap; }
+.ap-decision-table td { border-top:1px solid #22344e;color:#d6e1f3;font-size:10px;padding:11px;line-height:1.5; }
+.ap-decision-table td strong { color:#f0f5ff; }
+.ap-decision-positive { color:#6ee7b7!important;font-weight:700; }
+.ap-decision-negative { color:#fca5a5!important;font-weight:700; }
+.ap-risk-status { display:inline-flex;align-items:center;border-radius:20px;padding:5px 8px;font-size:9px;font-weight:800;letter-spacing:.04em;white-space:nowrap; }
+.ap-risk-status.is-fired { background:#4a202b;border:1px solid #873545;color:#fca5a5; }
+.ap-risk-status.is-ok { background:#12382f;border:1px solid #276653;color:#6ee7b7; }
+.ap-risk-status.is-missing { background:#27364d;border:1px solid #405572;color:#b6c5dc; }
+@media(max-width:900px) { .ap-decision-scenario-grid { grid-template-columns:1fr; }.ap-decision-scenario>strong { font-size:23px; } }
+@media(max-width:640px) { .ap-decision-section { padding:13px; }.ap-decision-section .ap-panel-heading { align-items:flex-start;flex-direction:column; }.ap-decision-edit-grid { grid-template-columns:1fr; }.ap-decision-pill { white-space:normal; } }
