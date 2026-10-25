@@ -581,6 +581,170 @@ function BottleneckDoraPage({baseRows,defects,doraSprints,premises,source}:{base
   </div>;
 }
 
+
+
+function decisionPremise(rows:Row[],patterns:RegExp[]):{value:number|null;raw:string;label:string} {
+  const row=rows.find(r=>patterns.some(p=>p.test(normalize(r["Parâmetro"]??r["Parametro"]??r["Parâmetro / indicador"]??r["Indicador"]??""))));
+  if(!row)return {value:null,raw:"",label:""};
+  const raw=str(row["Valor"]??row["valor"]);
+  const parsed=premiseValue([row],[/.*/]);
+  return {value:parsed,raw,label:str(row["Parâmetro"]??row["Parametro"]??row["Parâmetro / indicador"]??"")};
+}
+function decisionPercent(value:number|null,raw:string):number|null {
+  if(value===null)return null;
+  return /%/.test(raw)?value:(Math.abs(value)<=1?value*100:value);
+}
+function decisionMoney(value:number|null):string {
+  return value===null?"—":value.toLocaleString("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:2});
+}
+function decisionDate(value:Date|null):string {
+  return value&&!Number.isNaN(value.getTime())?value.toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric"}):"—";
+}
+function addSprintDays(value:Date|null,sprints:number):Date|null {
+  if(!value||!Number.isFinite(sprints))return null;
+  const d=new Date(value.getFullYear(),value.getMonth(),value.getDate());
+  d.setDate(d.getDate()+Math.max(0,sprints)*14);
+  return d;
+}
+function DecisionRisksPage({baseRows,backlog,premises,risks,defects,rework,calendar,doraSprints,source}:{baseRows:Row[];backlog:Row[];premises:Row[];risks:Row[];defects:Row[];rework:Row[];calendar:Row[];doraSprints:Row[];source:"demo"|"imported"}) {
+  const teamCostPremise=decisionPremise(premises,[/custo.*time.*sprint/,/custo.*equipe.*sprint/,/custo.*sprint/,/custo.*por sprint/]);
+  const reductionPremise=decisionPremise(premises,[/reduc.*reabert/,/reabert.*reduc/]);
+  const actionCostPremise=decisionPremise(premises,[/custo.*acao/,/custo.*ação/,/investimento.*qualidade/,/reforco.*qualidade/,/reforço.*qualidade/]);
+  const [reductionRaw,setReductionRaw]=useState("");
+  const [actionCostRaw,setActionCostRaw]=useState("");
+  const reductionDefault=decisionPercent(reductionPremise.value,reductionPremise.raw);
+  const actionDefault=actionCostPremise.value;
+  useEffect(()=>{setReductionRaw(reductionDefault===null?"":String(Number(reductionDefault.toFixed(2))));},[reductionPremise.raw,reductionPremise.value]);
+  useEffect(()=>{setActionCostRaw(actionDefault===null?"":String(actionDefault));},[actionCostPremise.raw,actionCostPremise.value]);
+  const reductionInput=Number(reductionRaw.replace(",",".")); 
+  const reductionPct=reductionRaw.trim()!==""&&Number.isFinite(reductionInput)?Math.min(100,Math.max(0,reductionInput)):null;
+  const actionInput=Number(actionCostRaw.replace(",",".")); 
+  const actionCost=actionCostRaw.trim()!==""&&Number.isFinite(actionInput)&&actionInput>=0?actionInput:null;
+  const allSprintNames=useMemo(()=>[...new Set(baseRows.map(r=>str(r["Sprint"])).filter(Boolean))].sort((a,b)=>sprintNum(a)-sprintNum(b)||a.localeCompare(b,"pt-BR",{numeric:true})),[baseRows]);
+  const sprintFacts=useMemo(()=>allSprintNames.map(sprint=>{
+    const items=baseRows.filter(r=>str(r["Sprint"])===sprint&&isCompletedRow(r));
+    const net=items.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
+    const reopened=items.filter(r=>(numeric(r["Reaberturas"])??0)>0).length;
+    const lead=items.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
+    const cycle=items.map(r=>numeric(r["Cycle time (dias corridos)"])).filter((v):v is number=>v!==null&&v>=0);
+    return {sprint,n:sprintNum(sprint),gross:items.length,net,reopened,lead,cycle};
+  }),[allSprintNames,baseRows]);
+  const avg=(values:number[])=>values.length?values.reduce((a,b)=>a+b,0)/values.length:null;
+  const bandMean=(min:number,max:number,key:"net"|"gross"|"reopened")=>avg(sprintFacts.filter(s=>s.n>=min&&s.n<=max).map(s=>s[key]));
+  const optimistic=bandMean(4,10,"net"), probable=bandMean(18,20,"net"), pessimistic=bandMean(15,17,"net");
+  const grossOptimistic=bandMean(4,10,"gross"),grossProbable=bandMean(18,20,"gross"),grossPessimistic=bandMean(15,17,"gross");
+  const lastThree=sprintFacts.filter(s=>s.n>=Math.max(1,(Math.max(0,...sprintFacts.map(x=>x.n))-2))&&s.n<=Math.max(0,...sprintFacts.map(x=>x.n)));
+  const reopenedLast3=avg(lastThree.map(s=>s.reopened));
+  const backlogCount=backlog.length;
+  const couldRows=backlog.filter(r=>normalize(r["Prioridade"])==="could");
+  const backlogWithoutCould=Math.max(0,backlogCount-couldRows.length);
+  const scenarios=[{name:"Otimista",range:"Sprints 4–10",net:optimistic,gross:grossOptimistic},{name:"Provável",range:"Sprints 18–20",net:probable,gross:grossProbable},{name:"Pessimista",range:"Sprints 15–17",net:pessimistic,gross:grossPessimistic}];
+  const lastCalendar=calendar.filter(r=>str(r["Fim"])).sort((a,b)=>sprintNum(str(b["Sprint"]))-sprintNum(str(a["Sprint"])))[0];
+  const lastBaseSprint=allSprintNames.reduce((best,s)=>sprintNum(s)>sprintNum(best)?s:best,"");
+  const endOfLastSprint=lastCalendar?dateValue(lastCalendar["Fim"]):null;
+  const calcOption=(name:string,scope:number,throughput:number|null,action:number|null)=>{
+    const sprints=throughput!==null&&throughput>0?Math.ceil(scope/throughput):null;
+    const team= sprints!==null&&teamCostPremise.value!==null?sprints*teamCostPremise.value:null;
+    const total=team!==null&&action!==null?team+action:null;
+    return {name,scope,throughput,sprints,finish:addSprintDays(endOfLastSprint,sprints??0),team,action,total};
+  };
+  const improvedThroughput=probable!==null&&reductionPct!==null&&reopenedLast3!==null?probable+(reductionPct/100)*reopenedLast3:null;
+  const options=[
+    calcOption("A · Manter",backlogCount,probable,0),
+    calcOption("B · Reforço de qualidade",backlogCount,improvedThroughput,actionCost),
+    calcOption("C · Cortar prioridade Could",backlogWithoutCould,probable,0),
+    calcOption("D · Reforço + corte",backlogWithoutCould,improvedThroughput,actionCost)
+  ];
+  const baseline=options[0].total;
+  const withSavings=options.map(o=>({...o,savings:baseline!==null&&o.total!==null?baseline-o.total:null}));
+  const latest3=sprintFacts.slice(-3);
+  const last3SprintNames=latest3.map(s=>s.sprint);
+  const defectsInLast3=defects.filter(r=>last3SprintNames.includes(str(r["Sprint de detecção"])));
+  const failures=defectsInLast3.filter(r=>/^(sim|yes|true|1)$/i.test(str(r["Causou falha de deploy?"])));
+  const deployTotal=latest3.reduce((sum,s)=>sum+(numeric(doraSprints.find(r=>str(r["Sprint"])===s.sprint)?.["Deploys na sprint"])??0),0);
+  const escapePerSprint=latest3.map(s=>{
+    const ds=defects.filter(r=>str(r["Sprint de detecção"])===s.sprint);
+    return ds.length?ds.filter(r=>normalize(r["Origem"])===normalize("Escola-piloto")).length/ds.length*100:null;
+  }).filter((v):v is number=>v!==null);
+  const cfr=deployTotal>0?failures.length/deployTotal*100:null;
+  const restore=failures.map(r=>numeric(r["Horas para restaurar"])).filter((v):v is number=>v!==null&&v>=0);
+  const recovery=avg(restore);
+  const leadP85Values=latest3.flatMap(s=>s.lead);
+  const sortedLeads=[...leadP85Values].sort((a,b)=>a-b);
+  const leadP85=sortedLeads.length?sortedLeads[Math.min(sortedLeads.length-1,Math.ceil(.85*sortedLeads.length)-1)]:null;
+  const qualityHours=rework.filter(r=>last3SprintNames.includes(str(r["Sprint do item"]))).reduce((sum,r)=>sum+(numeric(r["Horas de retrabalho"])??0),0);
+  const capacity=calendar.filter(r=>last3SprintNames.includes(str(r["Sprint"]))).reduce((sum,r)=>sum+(numeric(r["Capacidade (h)"])??0),0);
+  const reworkPct=capacity>0?qualityHours/capacity*100:null;
+  const currentValues:Record<string,number|null>={
+    escape:avg(escapePerSprint),
+    cfr,
+    rework:reworkPct,
+    recovery,
+    lead:leadP85,
+    throughput:avg(latest3.map(s=>s.net))
+  };
+  const metricAliases:Record<string,string[]>={
+    escape:["escape","taxa de escape","escape rate"],
+    cfr:["change failure","falha de mudanca","taxa de falha","cfr"],
+    rework:["retrabalho","rework"],
+    recovery:["recuperacao","recovery","restauracao"],
+    lead:["lead time p85","p85","lead time"],
+    throughput:["throughput liquido","throughput net","throughput"]
+  };
+  const currentForRisk=(row:Row):{value:number|null;metric:string;unit:string}=>{
+    const metricField=Object.keys(row).find(k=>/metrica|indicador|kpi/.test(normalize(k)));
+    const triggerField=Object.keys(row).find(k=>/gatilho|condicao|condição/.test(normalize(k)));
+    const text=normalize([metricField?row[metricField]:"",triggerField?row[triggerField]:"",...Object.values(row)].join(" "));
+    const key=Object.keys(metricAliases).find(k=>metricAliases[k].some(alias=>text.includes(normalize(alias))));
+    if(!key)return {value:null,metric:"",unit:""};
+    const unit=key==="escape"||key==="cfr"||key==="rework"?"%":key==="recovery"?" h":key==="lead"?" dias":" itens";
+    return {value:currentValues[key],metric:key,unit};
+  };
+  const riskDetails=risks.map((row,index)=>{
+    const keys=Object.keys(row);
+    const current=currentForRisk(row);
+    const triggerKey=keys.find(k=>/gatilho|limite|threshold|valor.*referencia|valor.*referência/.test(normalize(k)));
+    const triggerText=str(triggerKey?row[triggerKey]:"");
+    const triggerNum=numeric(triggerText.replace(/%/g,"").match(/-?\d+(?:[.,]\d+)?/)?.[0]);
+    const senseKey=keys.find(k=>/sentido|comparador|operador|direcao|direção/.test(normalize(k)));
+    const senseText=normalize(senseKey?row[senseKey]:"")+" "+normalize(triggerText);
+    const greater=/(>|maior|acima|superior|excede|exceder)/.test(senseText);
+    const less=/(<|menor|abaixo|inferior)/.test(senseText);
+    const fired=current.value!==null&&triggerNum!==null&&(greater?current.value>triggerNum:less?current.value<triggerNum:false);
+    const status=current.value===null||triggerNum===null?"SEM DADOS":fired?"DISPARADO":"OK";
+    return {row,index,current,triggerKey,triggerText,triggerNum,status,sense:greater?">":less?"<":"—"};
+  });
+  const moneySavings=(v:number|null)=>v===null?"—":(v>0?"+":"")+decisionMoney(v);
+  return <div className="ap-decision-page">
+    {source==="demo"&&<section className="ap-panel ap-decision-note"><strong>Importe a planilha para calcular forecast e riscos reais.</strong><p>Os cálculos usam as abas Backlog, Premissas, Riscos_Gatilhos, Base_Itens, Defeitos, Retrabalho, Calendario_Eventos e DORA_Sprint. Não há estimativas inventadas quando faltam dados.</p></section>}
+    <section className="ap-panel ap-decision-section">
+      <div className="ap-panel-heading"><div><h2>Forecast do backlog</h2><p>Backlog restante = quantidade de linhas da aba Backlog. Throughput líquido conta itens concluídos sem reabertura.</p></div><span className="ap-decision-pill">{backlogCount} itens restantes</span></div>
+      <div className="ap-decision-scenario-grid">{scenarios.map(sc=>{
+        const netSprints=sc.net!==null&&sc.net>0?Math.ceil(backlogCount/sc.net):null;
+        const grossSprints=sc.gross!==null&&sc.gross>0?Math.ceil(backlogCount/sc.gross):null;
+        return <div className="ap-decision-scenario" key={sc.name}><span>{sc.name.toUpperCase()}</span><strong>{netSprints===null?"—":netSprints+" sprints"}</strong><small>{sc.range} · throughput líquido {sc.net===null?"—":sc.net.toFixed(2)} itens/sprint</small><div>Referência bruta: {grossSprints===null?"—":grossSprints+" sprints"} ({sc.gross===null?"—":sc.gross.toFixed(2)} itens/sprint)</div><div className="ap-decision-date">Conclusão estimada: {netSprints===null?"—":decisionDate(addSprintDays(endOfLastSprint,netSprints))}</div></div>;
+      })}</div>
+      <p className="ap-quality-note">Datas calculadas a partir do fim da última sprint registrada em Calendario_Eventos, adicionando 14 dias por sprint restante. {endOfLastSprint?("Última sprint com data de fim: "+str(lastCalendar?.["Sprint"])+", "+decisionDate(endOfLastSprint)+"."):"Informe a coluna Fim em Calendario_Eventos para calcular datas."}</p>
+    </section>
+    <section className="ap-panel ap-decision-section">
+      <div className="ap-panel-heading"><div><h2>Opções de decisão</h2><p>Compare escopo, prazo e custo. As opções B e D usam a melhoria estimada com redução de reaberturas.</p></div></div>
+      <div className="ap-decision-edit-grid">
+        <label><span>Redução de reaberturas (%)</span><input type="number" min="0" max="100" step="1" value={reductionRaw} onChange={e=>setReductionRaw(e.target.value)} placeholder="Ex.: 25"/><small>Premissa: {reductionPremise.label||"redução de reaberturas"} · média de itens reabertos nas últimas 3 sprints: {reopenedLast3===null?"—":reopenedLast3.toFixed(2)}</small></label>
+        <label><span>Custo da ação de qualidade (R$)</span><input type="number" min="0" step="0.01" value={actionCostRaw} onChange={e=>setActionCostRaw(e.target.value)} placeholder="Ex.: 1500"/><small>Premissa: {actionCostPremise.label||"custo da ação"} · editável para simulação</small></label>
+      </div>
+      <div className="ap-decision-meta">Custo do time por sprint: <strong>{decisionMoney(teamCostPremise.value)}</strong> · throughput provável líquido: <strong>{probable===null?"—":probable.toFixed(2)}</strong> · throughput B/D: <strong>{improvedThroughput===null?"—":improvedThroughput.toFixed(2)}</strong> itens/sprint</div>
+      <div className="ap-table-scroll ap-decision-table"><table><thead><tr><th>Opção</th><th>Escopo</th><th>Throughput líquido</th><th>Sprints</th><th>Conclusão estimada</th><th>Custo do time</th><th>Custo da ação</th><th>Custo total</th><th>Economia vs. A</th></tr></thead><tbody>{withSavings.map(o=><tr key={o.name}><td><strong>{o.name}</strong></td><td>{o.scope} itens</td><td>{o.throughput===null?"—":o.throughput.toFixed(2)}</td><td>{o.sprints===null?"—":o.sprints}</td><td>{o.sprints===null?"—":decisionDate(addSprintDays(endOfLastSprint,o.sprints))}</td><td>{o.team===null?"—":decisionMoney(o.team)}</td><td>{o.action===null?"—":decisionMoney(o.action)}</td><td><strong>{o.total===null?"—":decisionMoney(o.total)}</strong></td><td className={o.savings!==null&&o.savings>0?"ap-decision-positive":o.savings!==null&&o.savings<0?"ap-decision-negative":""}>{moneySavings(o.savings)}</td></tr>)}</tbody></table></div>
+      <p className="ap-quality-note">Custo total = (sprints arredondadas para cima × custo do time por sprint) + custo da ação. A economia compara o custo total da opção com A. Valores não calculados aparecem como “—” quando falta uma premissa ou throughput válido.</p>
+    </section>
+    <section className="ap-panel ap-decision-section">
+      <div className="ap-panel-heading"><div><h2>Riscos e gatilhos</h2><p>Valor atual calculado com as últimas 3 sprints disponíveis. Status comparado ao sentido e ao limite cadastrados na aba Riscos_Gatilhos.</p></div><span className="ap-decision-pill">{risks.length} riscos</span></div>
+      {!risks.length?<div className="ap-empty">A aba Riscos_Gatilhos não foi encontrada ou não contém linhas. Importe a aba para avaliar os gatilhos.</div>:<div className="ap-table-scroll ap-decision-table"><table><thead><tr>{Object.keys(risks[0]).map(k=><th key={k}>{k}</th>)}<th>Valor atual (últimas 3 sprints)</th><th>Comparação</th><th>Status</th></tr></thead><tbody>{riskDetails.map(({row,index,current,triggerText,triggerNum,status,sense})=><tr key={index}>{Object.keys(risks[0]).map(k=><td key={k}>{str(row[k])||"—"}</td>)}<td>{current.value===null?"—":current.value.toLocaleString("pt-BR",{maximumFractionDigits:2})+current.unit}</td><td>{sense!=="—"&&triggerNum!==null?sense+" "+triggerNum+(/%/.test(triggerText)?"%":""):"—"}</td><td><span className={"ap-risk-status "+(status==="DISPARADO"?"is-fired":status==="OK"?"is-ok":"is-missing")}>{status}</span></td></tr>)}</tbody></table></div>}
+      <p className="ap-quality-note">Indicadores disponíveis: taxa de escape, change failure rate, retrabalho (% da capacidade), tempo de recuperação, Lead Time P85 e throughput líquido. Se um gatilho não identificar indicador, limite ou sentido, o status fica “SEM DADOS” em vez de presumir uma regra.</p>
+    </section>
+  </div>;
+}
+
+
 function AgilePulse() {
   const [rows,setRows]=useState<Row[]>(demo), [source,setSource]=useState<"demo"|"imported">("demo"), [fileName,setFileName]=useState("");
   const [sheetsData,setSheetsData]=useState<Record<string,Row[]>>({});
@@ -685,9 +849,9 @@ function AgilePulse() {
     setSheetsData(current=>({...current,Base_Itens:(current.Base_Itens||[]).map((row,index)=>index===rowIndex?({...row,[column]:value}):row)}));
   }
   return <main className="ap-shell">
-    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className={"ap-nav "+(activePage==="Dashboard"?"active":"")} onClick={()=>setActivePage("Dashboard")}><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(activePage==="WIP e Aging"?"active":"")} onClick={()=>setActivePage("WIP e Aging")}><Activity size={18}/> WIP e Aging</button><button className={"ap-nav "+(activePage==="Qualidade e Retrabalho"?"active":"")} onClick={()=>setActivePage("Qualidade e Retrabalho")}><Activity size={18}/> Qualidade e Retrabalho</button><button className={"ap-nav "+(activePage==="Gargalo e DORA"?"active":"")} onClick={()=>setActivePage("Gargalo e DORA")}><Activity size={18}/> Gargalo e DORA</button><button className={"ap-nav "+(sourceOpen?"active":"") onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button>{source==="imported"&&<><div className="ap-nav-label">ABAS DA PLANILHA</div>{["Base_Itens",...OPTIONAL_SHEET_NAMES].map(name=><button key={name} className={"ap-nav ap-subnav "+(activePage===name?"active":"")} onClick={()=>setActivePage(name)}>{name}{!sheetNames.includes(name)&&<span className="ap-missing-dot">!</span>}</button>)}</>}<div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
+    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className={"ap-nav "+(activePage==="Dashboard"?"active":"")} onClick={()=>setActivePage("Dashboard")}><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(activePage==="WIP e Aging"?"active":"")} onClick={()=>setActivePage("WIP e Aging")}><Activity size={18}/> WIP e Aging</button><button className={"ap-nav "+(activePage==="Qualidade e Retrabalho"?"active":"")} onClick={()=>setActivePage("Qualidade e Retrabalho")}><Activity size={18}/> Qualidade e Retrabalho</button><button className={"ap-nav "+(activePage==="Gargalo e DORA"?"active":"")} onClick={()=>setActivePage("Gargalo e DORA")}><Activity size={18}/> Gargalo e DORA</button><button className={"ap-nav "+(activePage==="Decisão e Riscos"?"active":"")} onClick={()=>setActivePage("Decisão e Riscos")}><Activity size={18}/> Decisão e Riscos</button><button className={"ap-nav "+(sourceOpen?"active":"") onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button>{source==="imported"&&<><div className="ap-nav-label">ABAS DA PLANILHA</div>{["Base_Itens",...OPTIONAL_SHEET_NAMES].map(name=><button key={name} className={"ap-nav ap-subnav "+(activePage===name?"active":"")} onClick={()=>setActivePage(name)}>{name}{!sheetNames.includes(name)&&<span className="ap-missing-dot">!</span>}</button>)}</>}<div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
     <section className="ap-main">
-    <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">{activePage==="Gargalo e DORA"?"FLUXO E CONFIABILIDADE":activePage==="Qualidade e Retrabalho"?"QUALIDADE E CONFIABILIDADE":activePage==="WIP e Aging"?"FLUXO DE TRABALHO":"MÉTRICAS DE FLUXO"}</div><h1>{activePage==="Gargalo e DORA"?"Gargalo e DORA":activePage==="Qualidade e Retrabalho"?"Qualidade e Retrabalho":activePage==="WIP e Aging"?"WIP e Aging":"Throughput"} <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>{activePage==="Gargalo e DORA"?"Identifique filas, etapas lentas e estabilidade das entregas.":activePage==="Qualidade e Retrabalho"?"Acompanhe defeitos, escape, esforço de retrabalho e custo da qualidade.":activePage==="WIP e Aging"?"Monitore itens em andamento, envelhecimento e limite de alerta.":"Acompanhe o ritmo de entrega e explore os itens concluídos por sprint."}</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
+    <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">{activePage==="Decisão e Riscos"?"PLANEJAMENTO E GOVERNANÇA":activePage==="Gargalo e DORA"?"FLUXO E CONFIABILIDADE":activePage==="Qualidade e Retrabalho"?"QUALIDADE E CONFIABILIDADE":activePage==="WIP e Aging"?"FLUXO DE TRABALHO":"MÉTRICAS DE FLUXO"}</div><h1>{activePage==="Decisão e Riscos"?"Decisão e Riscos":activePage==="Gargalo e DORA"?"Gargalo e DORA":activePage==="Qualidade e Retrabalho"?"Qualidade e Retrabalho":activePage==="WIP e Aging"?"WIP e Aging":"Throughput"} <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>{activePage==="Decisão e Riscos"?"Compare cenários de prazo e custo e acompanhe gatilhos de risco.":activePage==="Gargalo e DORA"?"Identifique filas, etapas lentas e estabilidade das entregas.":activePage==="Qualidade e Retrabalho"?"Acompanhe defeitos, escape, esforço de retrabalho e custo da qualidade.":activePage==="WIP e Aging"?"Monitore itens em andamento, envelhecimento e limite de alerta.":"Acompanhe o ritmo de entrega e explore os itens concluídos por sprint."}</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
     {sourceOpen&&<section className="ap-panel ap-import"><div className="ap-panel-heading"><div><h2>Fontes de Dados</h2><p>Excel .xlsx · leitura das linhas e abas conforme o modelo da planilha.</p></div><button className="ap-icon-button" onClick={()=>{setSourceOpen(false);}}><X size={18}/></button></div>
     <div className="ap-import-choice"><button className="ap-button ap-secondary" onClick={()=>{setRows(demo);setMapping(guessMap(demo));setSource("demo");setFileName("");setSheetsData({});setSheetNames([]);setSnapshotDate("");setActivePage("Dashboard");setUploadError("");setUploadNotice("Dados demonstrativos ativados.");setSourceOpen(false);}}>Usar dados demonstrativos</button><span>ou importe seu arquivo Excel</span></div><div className="ap-dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f)void parseFile(f);}}><FileUp size={26}/><strong>Selecione sua planilha</strong><span>Arraste o arquivo ou escolha no computador</span><small>Excel .xlsx · todas as abas de dados</small><input ref={fileRef} type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0];if(f)void parseFile(f);}}/><button className="ap-button ap-primary" onClick={()=>fileRef.current?.click()}>Escolher arquivo</button></div>
     {uploadError&&<div className="ap-error"><AlertCircle size={16}/>{uploadError}</div>}{uploadNotice&&<div className="ap-note">{uploadNotice}</div>}
@@ -696,8 +860,9 @@ function AgilePulse() {
     {source==="imported"&&<section className="ap-panel ap-quality-panel"><div className="ap-panel-heading"><div><h2><AlertCircle size={17}/> Alertas de qualidade</h2><p>Validações calculadas a partir das abas de dados.</p></div><span className="ap-quality-count">{qualityAlerts.length} alerta(s)</span></div>{qualityAlerts.length?<ul>{qualityAlerts.map((alert,i)=><li key={i}>{alert}</li>)}</ul>:<p className="ap-note">Nenhum problema identificado nas validações disponíveis.</p>}</section>}
     {activePage==="WIP e Aging"&&<WipAgingPage rows={sheetsData["WIP_Aberto"]||[]} snapshotDate={snapshotDate} baseRows={rows} source={source}/>} 
      {activePage==="Gargalo e DORA"&&<BottleneckDoraPage baseRows={rows} defects={sheetsData["Defeitos"]||[]} doraSprints={sheetsData["DORA_Sprint"]||[]} premises={sheetsData["Premissas"]||[]} source={source}/>}
+     {activePage==="Decisão e Riscos"&&<DecisionRisksPage baseRows={rows} backlog={sheetsData["Backlog"]||[]} premises={sheetsData["Premissas"]||[]} risks={sheetsData["Riscos_Gatilhos"]||[]} defects={sheetsData["Defeitos"]||[]} rework={sheetsData["Retrabalho"]||[]} calendar={sheetsData["Calendario_Eventos"]||[]} doraSprints={sheetsData["DORA_Sprint"]||[]} source={source}/>}
      {activePage==="Qualidade e Retrabalho"&&<QualityReworkPage defects={sheetsData["Defeitos"]||[]} rework={sheetsData["Retrabalho"]||[]} calendar={sheetsData["Calendario_Eventos"]||[]} premises={sheetsData["Premissas"]||[]} baseRows={rows} source={source}/>}
-    {activePage!=="Dashboard"&&activePage!=="WIP e Aging"&&activePage!=="Qualidade e Retrabalho"&&activePage!=="Gargalo e DORA"&&<section className="ap-panel ap-data-page"><div className="ap-panel-heading"><div><h2>{activePage}</h2><p>{activePage==="WIP_Aberto"&&snapshotDate?"Snapshot em "+snapshotDate:"Dados lidos diretamente da aba "+activePage}</p></div><span>{(sheetsData[activePage]||[]).length} linhas</span></div>{!sheetNames.includes(activePage)?<div className="ap-empty">Esta página depende da aba <strong>{activePage}</strong>. Envie a aba {activePage} no arquivo Excel para habilitá-la.</div>:<div className="ap-table-scroll"><table><thead><tr>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{(sheetsData[activePage]||[]).map((row,i)=><tr key={i}>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><td key={h}>{str(row[h])||"—"}</td>)}</tr>)}</tbody></table></div>}</section>}
+    {activePage!=="Dashboard"&&activePage!=="WIP e Aging"&&activePage!=="Qualidade e Retrabalho"&&activePage!=="Gargalo e DORA"&&activePage!=="Decisão e Riscos"&&<section className="ap-panel ap-data-page"><div className="ap-panel-heading"><div><h2>{activePage}</h2><p>{activePage==="WIP_Aberto"&&snapshotDate?"Snapshot em "+snapshotDate:"Dados lidos diretamente da aba "+activePage}</p></div><span>{(sheetsData[activePage]||[]).length} linhas</span></div>{!sheetNames.includes(activePage)?<div className="ap-empty">Esta página depende da aba <strong>{activePage}</strong>. Envie a aba {activePage} no arquivo Excel para habilitá-la.</div>:<div className="ap-table-scroll"><table><thead><tr>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{(sheetsData[activePage]||[]).map((row,i)=><tr key={i}>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><td key={h}>{str(row[h])||"—"}</td>)}</tr>)}</tbody></table></div>}</section>}
     {activePage==="Dashboard"&&source==="imported"&&missingOptional.length>0&&<section className="ap-panel ap-missing-sheets"><strong>Abas opcionais não encontradas</strong><p>Envie as seguintes abas para habilitar suas páginas: {missingOptional.join(", ")}.</p></section>}
     <div className="ap-source-strip"><div className="ap-source-icon"><Database size={18}/></div><div><strong>{source==="demo"?"Dados demonstrativos (fictícios)":fileName}</strong><span>{source==="demo"?"Exemplo ilustrativo · não representa dados reais":"Dados ativos nesta sessão do navegador"}</span></div><div className="ap-source-state"><Check size={13}/>{source==="demo"?"Exemplo ativo":"Importação confirmada"} <button onClick={()=>setSourceOpen(true)}>Gerenciar</button></div><button className="ap-button ap-secondary ap-edit-toggle" onClick={()=>setEditorOpen(v=>!v)}><FileSpreadsheet size={15}/>{editorOpen?"Ocultar dados":"Visualizar e editar dados"}</button></div>
     {editorOpen&&<section className="ap-panel ap-data-editor"><div className="ap-panel-heading"><div><div><h2>Dados carregados</h2><p>Edite qualquer célula. Os gráficos e indicadores são recalculados automaticamente.</p></div></div><button className="ap-icon-button" onClick={()=>setEditorOpen(false)} aria-label="Fechar editor"><X size={18}/></button></div><div className="ap-editor-meta">{rows.length} linhas · {Object.keys(rows[0]||{}).length} colunas · alterações aplicadas em tempo real</div><div className="ap-table-scroll ap-edit-table"><table><thead><tr>{Object.keys(rows[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((row,rowIndex)=><tr key={rowIndex}>{Object.keys(rows[0]||{}).map(column=><td key={column}><input aria-label={`Linha ${rowIndex+1}, ${column}`} title={`${column} · linha ${rowIndex+1}`} value={str(row[column])} onChange={e=>updateCell(rowIndex,column,e.target.value)}/></td>)}</tr>)}</tbody></table></div><p className="ap-note"><AlertCircle size={14}/>As edições ficam nesta sessão do navegador. Para manter alterações fora desta sessão, exporte ou salve os dados em um arquivo.</p></section>}
