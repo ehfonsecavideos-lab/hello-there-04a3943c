@@ -388,3 +388,42 @@ body { margin:0; }
  .ap-quality-cost .ap-panel-heading { align-items:flex-start;flex-direction:column; }
  .ap-quality-cost-total { white-space:normal; }
 }
+
+
+/* Bottleneck and DORA analytics */
+.ap-bd-page { margin-top:14px; }
+.ap-bd-controls { display:flex;justify-content:space-between;align-items:center;gap:16px;padding:13px 16px;margin-bottom:15px;border:1px solid #283a56;border-radius:12px;background:#101d32; }
+.ap-bd-controls>div { display:flex;flex-direction:column;gap:4px; }
+.ap-bd-controls strong { color:#e4ecfb;font-size:12px; }
+.ap-bd-controls span { color:#8195b4;font-size:10px; }
+.ap-bd-controls select { min-width:170px;border:1px solid #30435f;border-radius:7px;background:#0b172a;color:#d9e5fa;padding:9px 11px;font:inherit;font-size:11px; }
+.ap-bd-bottleneck { padding:18px;margin-bottom:20px; }
+.ap-bd-bottleneck .ap-panel-heading { align-items:flex-start;gap:14px; }
+.ap-bd-wait-card { flex-shrink:0;min-width:170px;padding:12px 14px;border:1px solid #33445f;border-radius:10px;background:#0b172a; }
+.ap-bd-wait-card span { display:block;color:#91a4c4;font-size:9px;font-weight:800;letter-spacing:.05em;line-height:1.5; }
+.ap-bd-wait-card strong { display:block;color:#f8fafc;font-size:25px;margin-top:5px; }
+.ap-bd-wait-card small { display:block;color:#8195b4;font-size:10px;margin-top:3px; }
+.ap-bd-stage-legend { margin-top:12px; }
+.ap-bd-table { margin-top:14px; }
+.ap-bd-table table { width:100%;min-width:580px;border-collapse:collapse; }
+.ap-bd-table th { background:#14233a;color:#91a4c4;font-size:10px;text-align:left;padding:11px; }
+.ap-bd-table td { border-top:1px solid #22344e;color:#d6e1f3;font-size:11px;padding:11px; }
+.ap-bd-dora-heading { margin:20px 0 12px; }
+.ap-bd-dora-heading h2 { color:#e4ecfb;font-size:17px;margin:0; }
+.ap-bd-dora-heading p { color:#8195b4;font-size:11px;margin:5px 0 0; }
+.ap-bd-dora-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px; }
+.ap-bd-chart-card { min-width:0;padding:17px; }
+.ap-bd-chart-card .ap-panel-heading { min-height:48px; }
+.ap-bd-chart-card .ap-panel-heading p { line-height:1.6; }
+.ap-bd-chart-card .ap-quality-legend { margin:0 0 12px; }
+@media(max-width:1000px) {
+ .ap-bd-dora-grid { grid-template-columns:minmax(0,1fr); }
+}
+@media(max-width:650px) {
+ .ap-bd-controls { align-items:stretch;flex-direction:column; }
+ .ap-bd-controls select { width:100%; }
+ .ap-bd-bottleneck { padding:13px; }
+ .ap-bd-bottleneck .ap-panel-heading { flex-direction:column; }
+ .ap-bd-wait-card { width:100%;box-sizing:border-box; }
+ .ap-bd-chart-card { padding:13px; }
+}
