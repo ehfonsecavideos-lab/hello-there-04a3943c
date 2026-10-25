@@ -672,9 +672,10 @@ function DecisionRisksPage({baseRows,backlog,premises,risks,defects,rework,calen
   const leadP85Values=latest3.flatMap(s=>s.lead);
   const sortedLeads=[...leadP85Values].sort((a,b)=>a-b);
   const leadP85=sortedLeads.length?sortedLeads[Math.min(sortedLeads.length-1,Math.ceil(.85*sortedLeads.length)-1)]:null;
-  const qualityHours=rework.filter(r=>last3SprintNames.includes(str(r["Sprint do item"]))).reduce((sum,r)=>sum+(numeric(r["Horas de retrabalho"])??0),0);
+  const reworkHours=rework.filter(r=>last3SprintNames.includes(str(r["Sprint do item"]))).reduce((sum,r)=>sum+(numeric(r["Horas de retrabalho"])??0),0);
+  const correctionHours=defects.filter(r=>last3SprintNames.includes(str(r["Sprint de detecção"]))).reduce((sum,r)=>sum+(numeric(r["Horas de correção"])??0),0);
   const capacity=calendar.filter(r=>last3SprintNames.includes(str(r["Sprint"]))).reduce((sum,r)=>sum+(numeric(r["Capacidade (h)"])??0),0);
-  const reworkPct=capacity>0?qualityHours/capacity*100:null;
+  const reworkPct=capacity>0?(reworkHours+correctionHours)/capacity*100:null;
   const currentValues:Record<string,number|null>={
     escape:avg(escapePerSprint),
     cfr,
