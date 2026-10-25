@@ -243,14 +243,14 @@ function PhaseBands({data}:{data:any[]}) {
   data.forEach((d,i)=>{const phase=d.phase||"Sem fase";const last=groups[groups.length-1];if(last&&last.phase===phase)last.end=d.sprint;else groups.push({phase,start:d.sprint,end:d.sprint,fill:phase==="Sem fase"?"#8293ad":(["Planejamento","Descoberta"].includes(phase)?"#4f86c6":(["Desenvolvimento","Construção"].includes(phase)?"#7b6bd6":(["Validação","Testes"].includes(phase)?"#3d9f8b":"#c28b4b"))});});
   return <>{groups.map((g,i)=><ReferenceArea key={g.start+"-"+i} x1={g.start} x2={g.end} yAxisId="left" ifOverflow="hidden" fill={g.fill} fillOpacity={0.12} strokeOpacity={0}/>)}</>;
 }
-function FlowChart({title,description,data,kind,unavailable}:{title:string;description:string;data:any[];kind:"throughput"|"leadTime"|"cycleTime"|"velocity";unavailable:string}) {
+function FlowChart({title,description,data,fullData,kind,unavailable}:{title:string;description:string;data:any[];fullData:any[];kind:"throughput"|"leadTime"|"cycleTime"|"velocity";unavailable:string}) {
   const hasValues=data.some(d=>kind==="throughput"?d.totalItems>0:kind==="leadTime"?d.leadTime!==null:kind==="cycleTime"?d.cycleTime!==null:d.velocity>0);
   const leadValues=data.map(d=>d.leadTime).filter((v):v is number=>typeof v==="number");
   const total=data.reduce((sum,d)=>sum+d.totalItems,0);
-  const netLast3=data.slice(-3).reduce((sum,d)=>sum+d.noReopen,0)/Math.max(1,data.slice(-3).length);
+  const latest3=fullData.slice(-3); const netLast3=latest3.reduce((sum,d)=>sum+d.noReopen,0)/Math.max(1,latest3.length);
   return <section className="ap-chart-card ap-metric-card">
     <div className="ap-chart-heading"><div><div className="ap-chart-title"><Activity size={19}/><h2>{title}</h2></div><p>{description}</p></div></div>
-    {kind==="throughput"&&<div className="ap-summary ap-flow-cards"><div><span>TOTAL DE ITENS</span><strong>{total}<small> itens</small></strong></div><div><span>MÉDIA POR SPRINT</span><strong>{(total/20).toFixed(1)}<small> itens</small></strong></div><div><span>THROUGHPUT LÍQUIDO MÉDIO · ÚLTIMAS 3</span><strong>{netLast3.toFixed(1)}<small> itens</small></strong></div></div>}
+    {kind==="throughput"&&<div className="ap-summary ap-flow-cards"><div><span>TOTAL DE ITENS</span><strong>{total}<small> itens</small></strong></div><div><span>MÉDIA POR SPRINT</span><strong>{(total/Math.max(1,data.length)).toFixed(1)}<small> itens</small></strong></div><div><span>THROUGHPUT LÍQUIDO MÉDIO · ÚLTIMAS 3</span><strong>{netLast3.toFixed(1)}<small> itens</small></strong></div></div>}
     {kind==="leadTime"&&<div className="ap-summary ap-flow-cards"><div><span>MÉDIA GERAL</span><strong>{leadValues.length?(leadValues.reduce((a,b)=>a+b,0)/leadValues.length).toFixed(1):"—"}<small> dias corridos</small></strong></div><div><span>P85 GERAL · INCLUSIVO</span><strong>{data[0]?.leadP85General==null?"—":data[0].leadP85General.toFixed(1)}<small> dias corridos</small></strong></div></div>}
     {hasValues?<div className="ap-chart-scroll"><div className="ap-chart-inner" style={{width:Math.max(980,data.length*58),height:340}}><ResponsiveContainer width="100%" height={330}><ComposedChart data={data} margin={{top:18,right:20,left:0,bottom:8}}>
       <CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/>
@@ -388,10 +388,10 @@ function AgilePulse() {
     {activePage==="Dashboard"&&<>
     <div className="ap-chart-controls"><span><i/> Histórico de 20 sprints</span><label>Sprint <select value={filter} onChange={e=>setFilter(e.target.value)}><option>Todas</option>{SPRINT_OPTIONS.map(s=><option key={s}>{s}</option>)}</select></label></div>
     <div className="ap-flow-grid">
-      <FlowChart title="Throughput" description="Itens por sprint, separados entre itens sem reabertura e itens reabertos." data={chartRows} kind="throughput" unavailable="Não há itens nas sprints selecionadas."/>
-      <FlowChart title="Lead Time" description="Média por sprint e P85 inclusivo, em dias corridos." data={chartRows} kind="leadTime" unavailable="Não há valores válidos na coluna Lead time (dias corridos)."/>
-      <FlowChart title="Cycle Time" description="Média por sprint e eficiência de fluxo (Cycle Time ÷ Lead Time)." data={chartRows} kind="cycleTime" unavailable="Não há valores válidos nas colunas Cycle time (dias corridos) e Lead time (dias corridos)."/>
-      <FlowChart title="Velocity" description="Soma dos Story Points dos itens concluídos em cada sprint." data={chartRows} kind="velocity" unavailable="Não há Story Points numéricos válidos nos itens concluídos."/>
+      <FlowChart title="Throughput" description="Itens por sprint, separados entre itens sem reabertura e itens reabertos." data={chartRows} fullData={flowSeries} kind="throughput" unavailable="Não há itens nas sprints selecionadas."/>
+      <FlowChart title="Lead Time" description="Média por sprint e P85 inclusivo, em dias corridos." data={chartRows} fullData={flowSeries} kind="leadTime" unavailable="Não há valores válidos na coluna Lead time (dias corridos)."/>
+      <FlowChart title="Cycle Time" description="Média por sprint e eficiência de fluxo (Cycle Time ÷ Lead Time)." data={chartRows} fullData={flowSeries} kind="cycleTime" unavailable="Não há valores válidos nas colunas Cycle time (dias corridos) e Lead time (dias corridos)."/>
+      <FlowChart title="Velocity" description="Soma dos Story Points dos itens concluídos em cada sprint." data={chartRows} fullData={flowSeries} kind="velocity" unavailable="Não há Story Points numéricos válidos nos itens concluídos."/>
     </div>
     <div className="ap-chart-footer"><span>Fonte: {source==="demo"?"dados fictícios":fileName}</span><span>Faixas de fase e eventos usam Calendario_Eventos.</span></div>
     <InlineAssistant metricKey="throughput" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName}/>
