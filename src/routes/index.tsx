@@ -261,8 +261,8 @@ function FlowChart({title,description,data,fullData,kind,unavailable}:{title:str
       <PhaseBands data={data}/>
       <Tooltip content={<FlowTooltip/>}/>
       {kind==="throughput"&&<><Bar yAxisId="left" dataKey="noReopen" name="Itens sem reabertura" stackId="throughput" fill="#38bdf8" maxBarSize={32}/><Bar yAxisId="left" dataKey="reopened" name="Itens reabertos" stackId="throughput" fill="#c084fc" radius={[5,5,0,0]} maxBarSize={32}/></>}
-      {kind==="leadTime"&&<><Line yAxisId="left" type="monotone" dataKey="leadTime" name="Lead Time médio" stroke="#a78bfa" strokeWidth={2.5} connectNulls dot={{r:3}}/><Line yAxisId="left" type="monotone" dataKey="leadP85" name="P85 por sprint" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" connectNulls dot={false}/></>}
-      {kind==="cycleTime"&&<><Line yAxisId="left" type="monotone" dataKey="cycleTime" name="Cycle Time médio" stroke="#38bdf8" strokeWidth={2.5} connectNulls dot={{r:3}}/><Line yAxisId="right" type="monotone" dataKey="efficiency" name="Eficiência de fluxo" stroke="#34d399" strokeWidth={2} connectNulls dot={false}/></>}
+      {kind==="leadTime"&&<><Line yAxisId="left" type="monotone" dataKey="leadTime" name="Lead Time médio (dias corridos)" stroke="#a78bfa" strokeWidth={2.5} connectNulls dot={{r:3}}/><Line yAxisId="left" type="monotone" dataKey="leadP85" name="P85 por sprint (dias corridos)" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" connectNulls dot={false}/></>}
+      {kind==="cycleTime"&&<><Line yAxisId="left" type="monotone" dataKey="cycleTime" name="Cycle Time médio (dias corridos)" stroke="#38bdf8" strokeWidth={2.5} connectNulls dot={{r:3}}/><Line yAxisId="right" type="monotone" dataKey="efficiency" name="Eficiência de fluxo" stroke="#34d399" strokeWidth={2} connectNulls dot={false}/></>}
       {kind==="velocity"&&<Bar yAxisId="left" dataKey="velocity" name="Velocity" fill="#34d399" radius={[5,5,0,0]} maxBarSize={32}/>}
     </ComposedChart></ResponsiveContainer></div></div>:<div className="ap-empty ap-metric-empty">{unavailable}</div>}
     <div className="ap-phase-legend">{[...new Set(data.map(d=>d.phase||"Sem fase"))].map(phase=><span key={phase}><i/>{phase}</span>)}</div>
@@ -391,7 +391,7 @@ function AgilePulse() {
     <div className="ap-flow-grid">
       <FlowChart title="Throughput" description="Itens por sprint, separados entre itens sem reabertura e itens reabertos." data={chartRows} fullData={flowSeries} kind="throughput" unavailable="Não há itens nas sprints selecionadas."/>
       <FlowChart title="Lead Time" description="Média por sprint e P85 inclusivo, em dias corridos." data={chartRows} fullData={flowSeries} kind="leadTime" unavailable="Não há valores válidos na coluna Lead time (dias corridos)."/>
-      <FlowChart title="Cycle Time" description="Média por sprint e eficiência de fluxo (Cycle Time ÷ Lead Time)." data={chartRows} fullData={flowSeries} kind="cycleTime" unavailable="Não há valores válidos nas colunas Cycle time (dias corridos) e Lead time (dias corridos)."/>
+      <FlowChart title="Cycle Time" description="Cycle Time médio em dias corridos, mais eficiência de fluxo (Cycle Time ÷ Lead Time, em %)." data={chartRows} fullData={flowSeries} kind="cycleTime" unavailable="Não há valores válidos nas colunas Cycle time (dias corridos) e Lead time (dias corridos)."/>
       <FlowChart title="Velocity" description="Soma dos Story Points dos itens concluídos em cada sprint." data={chartRows} fullData={flowSeries} kind="velocity" unavailable="Não há Story Points numéricos válidos nos itens concluídos."/>
     </div>
     <div className="ap-chart-footer"><span>Fonte: {source==="demo"?"dados fictícios":fileName}</span><span>Faixas de fase e eventos usam Calendario_Eventos.</span></div>
