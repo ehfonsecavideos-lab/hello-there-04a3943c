@@ -483,7 +483,7 @@ function bottleneckPremisePercent(rows:Row[]):number|null {
   const row=rows.find(r=>/meta.*(change failure|falha|failure)/.test(normalize(r["Parâmetro"]??r["Parametro"]??"")));
   if(!row)return null;
   const raw=str(row["Valor"]??row["valor"]);
-  const value=numeric(raw);
+  const value=numeric(raw.replace(/%/g,""));
   if(value===null)return null;
   return raw.includes("%")?value:(value>0&&value<=1?value*100:value);
 }
@@ -535,16 +535,16 @@ function BottleneckDoraPage({baseRows,defects,doraSprints,premises,source}:{base
     return {sprint,...stageMeans,queue,cycleMean,leadMean,slowest,waitPct,deploys,deploysPerWeek:deploys===null?null:deploys/2,failedCount:failed.length,reportedFailures:allFailures.length,cfr,recovery};
   }),[sprintLabels,baseRows,defects,doraSprints]);
   const shown=period==="Todas"?data:data.filter(d=>d.sprint===period);
-  const waitNumerator=shown.reduce((sum,d)=>{
+  const waitTotals=shown.reduce((totals,d)=>{
     const items=baseRows.filter(r=>str(r["Sprint"])===d.sprint);
-    return sum+items.reduce((s,r)=>{
+    return items.reduce((acc,r)=>{
       const lead=numeric(r["Lead time (dias corridos)"]),cycle=numeric(r["Cycle time (dias corridos)"]);
-      if(lead===null||cycle===null)return s;
-      return s+(numeric(r["Waiting for QA"])||0)+(numeric(r["Waiting for review"])||0)+Math.max(0,lead-cycle);
-    },0);
-  },0);
-  const waitDenominator=shown.reduce((sum,d)=>sum+baseRows.filter(r=>str(r["Sprint"])===d.sprint).reduce((s,r)=>s+(numeric(r["Lead time (dias corridos)"])||0),0),0);
-  const totalWaitPct=waitDenominator>0?waitNumerator/waitDenominator*100:null;
+      if(lead===null||cycle===null||lead<=0)return acc;
+      const waiting=(numeric(r["Waiting for QA"])||0)+(numeric(r["Waiting for review"])||0)+Math.max(0,lead-cycle);
+      return {wait:acc.wait+waiting,lead:acc.lead+lead};
+    },totals);
+  },{wait:0,lead:0});
+  const totalWaitPct=waitTotals.lead>0?waitTotals.wait/waitTotals.lead*100:null;
   const hasData=baseRows.length>0||defects.length>0||doraSprints.length>0;
   const doraChart=(title:string,description:string,key:string,color:string,unit:string,meta?:number|null)=> <section className="ap-panel ap-bd-chart-card">
     <div className="ap-panel-heading"><div><h2>{title}</h2><p>{description}</p></div></div>
