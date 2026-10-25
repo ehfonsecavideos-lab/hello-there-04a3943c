@@ -8,16 +8,16 @@
 - Análise estatística local com média, mediana, extremos, variações e limitações.
 - Chat embutido com respostas locais determinísticas e endpoint opcional para IA generativa.
 
-## Configurar Claude (IA generativa)
+## Configurar a IA nativa do Lovable
 
-O endpoint `POST /api/ai` usa diretamente a API oficial da Anthropic. Configure os segredos no ambiente do servidor/Lovable, nunca no código do navegador:
+O endpoint `POST /api/ai` usa o gateway de IA do Lovable e, por padrão, o modelo `google/gemini-3.8-flash`, indicado pelo Lovable para experiências de chat e assistentes. O código não exige chave da Anthropic, OpenAI ou outro provedor externo.
 
-- `ANTHROPIC_API_KEY` — obrigatório.
-- `ANTHROPIC_MODEL` — opcional; padrão `claude-sonnet-4-20250514`.
+- Ative o Lovable AI para o projeto e use o ambiente/backend do Lovable que disponibiliza `LOVABLE_API_KEY`.
+- `LOVABLE_AI_MODEL` é opcional e permite selecionar outro modelo compatível com o gateway do Lovable.
+- Não exponha chaves no navegador nem as inclua no repositório.
+- Sem acesso ao gateway nativo, o dashboard mantém a análise estatística e as respostas locais de contingência.
 
-Sem `ANTHROPIC_API_KEY`, o dashboard mantém a análise estatística e as respostas locais de fallback, mas a análise generativa e o chat não serão executados pelo Claude.
-
-Cada gráfico tem sua própria área de análise e chat logo abaixo dele. O conteúdo enviado ao modelo é limitado e contextualizado para a métrica selecionada.
+Cada gráfico tem sua própria área de análise e chat logo abaixo dele. As chamadas enviam a métrica selecionada e um conjunto limitado de dados para evitar respostas genéricas ou valores inventados.
 
 ## Limitações atuais
 - A planilha é processada na sessão do navegador e não é persistida em banco compartilhado.
