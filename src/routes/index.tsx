@@ -506,7 +506,7 @@ function BottleneckDoraPage({baseRows,defects,doraSprints,premises,source}:{base
     return [...new Set(all)].sort((a,b)=>sprintNum(a)-sprintNum(b)||a.localeCompare(b,"pt-BR",{numeric:true}));
   },[baseRows,defects,doraSprints]);
   const data=useMemo(()=>sprintLabels.map(sprint=>{
-    const items=baseRows.filter(r=>str(r["Sprint"])===sprint);
+    const items=baseRows.filter(r=>sameSprint(r["Sprint"],sprint));
     const stageMeans:Record<string,number|null>={};
     BOTTLENECK_STAGES.forEach(stage=>{
       const values=items.map(r=>numeric(r[stage.field])).filter((v):v is number=>v!==null&&v>=0);
@@ -664,7 +664,7 @@ function DecisionRisksPage({baseRows,backlog,premises,risks,defects,rework,calen
   const withSavings=options.map(o=>({...o,savings:baseline!==null&&o.total!==null?baseline-o.total:null}));
   const latest3=sprintFacts.slice(-3);
   const last3SprintNames=latest3.map(s=>s.sprint);
-  const defectsInLast3=defects.filter(r=>last3SprintNames.includes(str(r["Sprint de detecção"])));
+  const defectsInLast3=defects.filter(r=>last3SprintNames.some(s=>sameSprint(s,r["Sprint de detecção"])));
   const failures=defectsInLast3.filter(r=>/^(sim|yes|true|1)$/i.test(str(r["Causou falha de deploy?"])));
   const deployTotal=latest3.reduce((sum,s)=>sum+(numeric(doraSprints.find(r=>sameSprint(r["Sprint"],s.sprint))?.["Deploys na sprint"])??0),0);
   const escapePerSprint=latest3.map(s=>{
@@ -758,7 +758,7 @@ function summaryFmt(v:number|null,unit:string):string { if(v===null||!Number.isF
 function ExecutiveSummaryPage({baseRows,defects,rework,calendar,doraSprints,premises,risks,backlog,source}:{baseRows:Row[];defects:Row[];rework:Row[];calendar:Row[];doraSprints:Row[];premises:Row[];risks:Row[];backlog:Row[];source:"demo"|"imported"}) {
  const sprints=[...new Set([...baseRows.map(r=>str(r["Sprint"])),...defects.map(r=>str(r["Sprint de detecção"])),...rework.map(r=>str(r["Sprint do item"])),...doraSprints.map(r=>str(r["Sprint"]))].filter(Boolean))].sort((a,b)=>sprintNum(a)-sprintNum(b));
  const data=sprints.map(sprint=>{
-  const items=baseRows.filter(r=>str(r["Sprint"])===sprint&&isCompletedRow(r)), gross=items.length, net=items.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
+  const items=baseRows.filter(r=>sameSprint(r["Sprint"],sprint)&&isCompletedRow(r)), gross=items.length, net=items.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
   const lead=items.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
   const ds=defects.filter(r=>sameSprint(r["Sprint de detecção"],sprint)), school=ds.filter(r=>normalize(r["Origem"])===normalize("Escola-piloto")).length;
   const rw=rework.filter(r=>sameSprint(r["Sprint do item"],sprint)), cap=numeric(calendar.find(r=>sameSprint(r["Sprint"],sprint))?.["Capacidade (h)"]);
