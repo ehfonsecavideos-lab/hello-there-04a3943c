@@ -131,7 +131,7 @@ function metricLocalAnswer(q: string, stats: ReturnType<typeof calculate>, key: 
   if (/maior|maximo|máximo|mais alto|mais longa|maior valor/.test(n)) return max.sprint+" teve o maior "+metricNames[key]+": "+max.value.toFixed(2)+" "+unit+".";
   if (/menor|minimo|mínimo|mais baixo|mais curta|menor valor/.test(n)) return min.sprint+" teve o menor "+metricNames[key]+": "+min.value.toFixed(2)+" "+unit+".";
   if (/queda|caiu|diminu|varia|diferen/.test(n)) { const changes=series.slice(1).map((x,i)=>({from:series[i],to:x,d:x.value-series[i].value})); return changes.length?changes.map(x=>x.from.sprint+" → "+x.to.sprint+": "+x.from.value.toFixed(1)+" → "+x.to.value.toFixed(1)+" ("+(x.d>0?"+":"")+x.d.toFixed(1)+" "+unit+")").join("\\n"):"Não há sprints suficientes para comparar."; }
-  const match=q.match(/sprint\\s*(\\d+)/i);
+  const match=q.match(/sprint\s*(\d+)/i);
   if(match){const s=series.find(x=>sprintNum(x.sprint)===Number(match[1]));return s?s.sprint+": "+s.value.toFixed(2)+" "+unit+".":"Não encontrei essa sprint com valores válidos para "+metricNames[key]+".";}
   return metricAnalysis(stats,key).join("\\n");
 }
@@ -175,7 +175,7 @@ function AgilePulse() {
       const res=await fetch("/api/ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q,metric:activeMetric,metricName:metricNames[activeMetric],messages:next.slice(-8),data:rows.slice(0,500),mapping,completedStatuses:statuses,stats,metricSeries:stats.counts.map(s=>({sprint:s.sprint,value:s[activeMetric]}))})});
       const body=await res.json();if(res.ok&&body.answer)setMessages(m=>[...m,{role:"assistant",content:body.answer}]);
       else {setMessages(m=>[...m,{role:"assistant",content:metricLocalAnswer(q,stats,activeMetric,rows,mapping,statuses)}]);if(body.code!=="AI_NOT_CONFIGURED")setError(body.error||"A IA não respondeu; a resposta acima é local.");}
-    } catch {setMessages(m=>[...m,{role:"assistant",content:localAnswer(q,stats,rows,mapping,statuses)}]);setError("Servidor de IA indisponível. A resposta acima foi calculada localmente.");}
+    } catch {setMessages(m=>[...m,{role:"assistant",content:metricLocalAnswer(q,stats,activeMetric,rows,mapping,statuses)}]);setError("Servidor de IA indisponível. A resposta acima foi calculada localmente.");}
     finally{setSending(false);}
   }
   const analysis = [
