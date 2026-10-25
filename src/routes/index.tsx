@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import * as XLSX from "xlsx";
@@ -10,6 +10,22 @@ type MapCols = { sprint: string; item: string; status: string; squad: string; cr
 type Msg = { role: "user" | "assistant"; content: string };
 type MetricKey = "throughput" | "leadTime" | "cycleTime" | "velocity";
 const metricNames: Record<MetricKey, string> = { throughput: "Throughput", leadTime: "Lead Time", cycleTime: "Cycle Time", velocity: "Velocity" };
+const BASE_COLUMNS = ["Issue key","Resumo","Sprint","Sprint nº","Tipo","Papel","Story Points","Prioridade","Épico / EAP","Criado","Concluído","Lead time (dias corridos)","Cycle time (dias corridos)","In development","Waiting for QA","In QA review","In code review","Waiting for review","Dias bloqueado","Reaberturas"];
+const OPTIONAL_COLUMNS: Record<string,string[]> = {
+  "Calendario_Eventos":["Sprint","Início","Fim","Evento / contexto","Pessoas no time","Capacidade (h)","Fase"],
+  "Defeitos":["ID","Sprint de detecção","Data de detecção","Item afetado (Issue key)","Módulo","Origem","Severidade","Horas de correção","Causou falha de deploy?","Horas para restaurar"],
+  "Retrabalho":["ID","Item reaberto (Issue key)","Sprint do item","Nº da reabertura","Causa","Etapa em que foi detectada","Papel responsável","Horas de retrabalho"],
+  "DORA_Sprint":["Sprint","Deploys na sprint"],
+  "Backlog":["Issue key","Resumo","Módulo","Prioridade","Story Points","Depende de terceiros?"],
+  "WIP_Aberto":[],
+  "Premissas":["Parâmetro","Valor"],
+  "Riscos_Gatilhos":[],
+  "Stakeholders":[],
+  "Dicionario_Metricas":[]
+};
+const IGNORED_SHEETS = new Set(["Indicadores_Sprint","Fluxo_Etapas","Forecast_Opcoes","Resumo_Executivo"]);
+const OPTIONAL_SHEET_NAMES = Object.keys(OPTIONAL_COLUMNS);
+const STORE_KEY = "agilepulse-workbook-v2";
 const demo: Row[] = [
   { "Issue key": "AP-101", Summary: "Login", Sprint: "Sprint 1", "Issue Status": "Done", Squad: "Plataforma", "Created Date": "2026-01-05", "Development Start Date": "2026-01-08", "Resolution Date": "2026-01-10", "Story Points": 2 },
   { "Issue key": "AP-102", Summary: "Perfil", Sprint: "Sprint 1", "Issue Status": "Done", Squad: "Experiência", "Created Date": "2026-01-05", "Development Start Date": "2026-01-08", "Resolution Date": "2026-01-10", "Story Points": 3 },
@@ -51,6 +67,8 @@ function guessMap(rows: Row[]): MapCols {
 function sprintNum(s: string) { const m = s.match(/\d+/); return m ? Number(m[0]) : Number.MAX_SAFE_INTEGER; }
 function done(v: unknown, statuses: string[]) { return statuses.some(s => normalize(s) === normalize(v)); }
 function dateValue(value: unknown): Date | null {
+  if(value instanceof Date && !Number.isNaN(value.getTime())) return new Date(value.getFullYear(),value.getMonth(),value.getDate());
+  if(typeof value === "number" && Number.isFinite(value)){const p=XLSX.SSF.parse_date_code(value);if(p)return new Date(p.y,p.m-1,p.d);}
   const raw = str(value); if (!raw) return null;
   const br = raw.match(/^(\\d{1,2})[/. -](\\d{1,2})[/. -](\\d{2,4})$/);
   let d: Date;
@@ -69,14 +87,19 @@ function calculate(rows: Row[], m: MapCols, statuses: string[]) {
   const counts = labels.map(sprint => {
     let throughput = 0, velocity = 0, leadTotal = 0, leadCount = 0, cycleTotal = 0, cycleCount = 0;
     valid.filter(r => str(r[m.sprint]) === sprint).forEach(r => {
-      if (!done(r[m.status], statuses)) return;
+      const completed = str(r["Concluído"]) ? true : done(r[m.status], statuses);
+      if (!completed) return;
       const id = m.item ? str(r[m.item]) : "";
       if (id && seen.has(id)) { duplicates++; return; }
       if (id) seen.add(id);
       throughput++;
       if (m.storyPoints) { const points = Number(str(r[m.storyPoints]).replace(",", ".")); if (Number.isFinite(points) && points > 0) velocity += points; }
-      if (m.created && m.completed) { const days=elapsedDays(r[m.created],r[m.completed]); if(days!==null){leadTotal+=days;leadCount++;} }
-      if (m.started && m.completed) { const days=elapsedDays(r[m.started],r[m.completed]); if(days!==null){cycleTotal+=days;cycleCount++;} }
+      const directLead = Number(str(r["Lead time (dias corridos)"]).replace(",", "."));
+      const lead = str(r["Lead time (dias corridos)"]) && Number.isFinite(directLead) ? directLead : (m.created && m.completed ? elapsedDays(r[m.created],r[m.completed]) : null);
+      if (lead!==null && lead>=0) {leadTotal+=lead;leadCount++;}
+      const directCycle = Number(str(r["Cycle time (dias corridos)"]).replace(",", "."));
+      const cycle = str(r["Cycle time (dias corridos)"]) && Number.isFinite(directCycle) ? directCycle : (m.started && m.completed ? elapsedDays(r[m.started],r[m.completed]) : null);
+      if (cycle!==null && cycle>=0) {cycleTotal+=cycle;cycleCount++;}
     });
     return { sprint, throughput, velocity, leadTime: leadCount ? leadTotal/leadCount : null, cycleTime: cycleCount ? cycleTotal/cycleCount : null, leadCount, cycleCount };
   });
@@ -167,97 +190,141 @@ function InlineAssistant({ metricKey, stats, rows, mapping, statuses, sourceLabe
     {chatOpen&&<section className="ap-inline-panel ap-inline-chat"><div className="ap-inline-heading"><div><MessageCircle size={16}/><strong>Pergunte à IA · {metricNames[metricKey]}</strong></div><span>{sourceLabel} · {stats.labels} sprints</span></div><div className="ap-chat-messages">{messages.map((m,i)=><div key={i} className={"ap-message "+m.role}><div className="ap-message-avatar">{m.role==="assistant"?<Sparkles size={14}/>:"Você"}</div><div>{m.content.split("\n").map((line,j)=><p key={j}>{line||" "}</p>)}</div></div>)}{sending&&<div className="ap-typing">A IA está consultando os dados…</div>}{error&&<div className="ap-error"><AlertCircle size={15}/>{error}<button onClick={()=>setError("")}>Fechar</button></div>}</div><div className="ap-suggestions">{[`Qual sprint teve maior ${metricNames[metricKey]}?`,`Qual foi a média de ${metricNames[metricKey]}?`,`Houve alguma queda em ${metricNames[metricKey]}?`].map(q=><button key={q} onClick={()=>setQuestion(q)}>{q}</button>)}</div><form className="ap-chat-form" onSubmit={e=>{e.preventDefault();void send();}}><input value={question} onChange={e=>setQuestion(e.target.value)} placeholder={"Pergunte sobre "+metricNames[metricKey]+"…"} /><button type="submit" disabled={!question.trim()||sending}><Send size={17}/></button></form><div className="ap-chat-footnote">A IA usa os dados carregados desta métrica. As respostas locais são apenas fallback.</div></section>}
   </div>;
 }
+function excelCell(value: unknown, header: string): unknown {
+  if(value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0,10);
+  if(typeof value==="number" && /(data|criado|conclu|in[ií]cio|fim|detec[cç][aã]o|snapshot)/i.test(header)){
+    const parsed=XLSX.SSF.parse_date_code(value);
+    if(parsed)return new Date(Date.UTC(parsed.y,parsed.m-1,parsed.d)).toISOString().slice(0,10);
+  }
+  return value ?? "";
+}
+function parseSheetRows(ws: XLSX.WorkSheet, headerIndex: number, startIndex: number, endIndex?: number): Row[] {
+  const matrix=XLSX.utils.sheet_to_json<unknown[]>(ws,{header:1,defval:"",raw:true,blankrows:false}) as unknown[][];
+  const headers=(matrix[headerIndex]||[]).map(v=>str(v));
+  const rows:Row[]=[];
+  const stop=Math.min(matrix.length,endIndex===undefined?matrix.length:endIndex);
+  for(let i=startIndex;i<stop;i++){
+    const values=matrix[i]||[];
+    const row:Row={};
+    headers.forEach((header,j)=>{if(header)row[header]=excelCell(values[j],header);});
+    if(Object.values(row).some(v=>str(v)!==""))rows.push(row);
+  }
+  return rows;
+}
 function AgilePulse() {
   const [rows,setRows]=useState<Row[]>(demo), [source,setSource]=useState<"demo"|"imported">("demo"), [fileName,setFileName]=useState("");
-  const [pending,setPending]=useState<Row[]|null>(null), [sheetNames,setSheetNames]=useState<string[]>([]), [sheet,setSheet]=useState("");
+  const [sheetsData,setSheetsData]=useState<Record<string,Row[]>>({});
+  const [sheetNames,setSheetNames]=useState<string[]>([]), [snapshotDate,setSnapshotDate]=useState("");
+  const [activePage,setActivePage]=useState("Dashboard");
   const [mapping,setMapping]=useState<MapCols>(guessMap(demo)), [statusText,setStatusText]=useState("Done, Concluído, Resolvido, Closed, Complete, Feito, Testado, Aprovado para Produção");
   const [sourceOpen,setSourceOpen]=useState(false), [editorOpen,setEditorOpen]=useState(false);
   const [uploadError,setUploadError]=useState(""), [uploadNotice,setUploadNotice]=useState("");
   const [filter,setFilter]=useState("Todas as sprints"); const fileRef=useRef<HTMLInputElement>(null);
-  const headers=Object.keys((pending||rows)[0]||{}), statuses=statusText.split(",").map(s=>s.trim()).filter(Boolean);
+  const [storageReady,setStorageReady]=useState(false);
+  const headers=Object.keys(rows[0]||{}), statuses=statusText.split(",").map(s=>s.trim()).filter(Boolean);
   const stats=useMemo(()=>calculate(rows,mapping,statuses),[rows,mapping,statusText]);
   const chartRows=filter==="Todas as sprints"?stats.counts:stats.counts.filter(s=>s.sprint===filter);
-  const quality=stats.noSprint+stats.noStatus+stats.noItem+stats.duplicates;
-  async function parseFile(file: File) {
-    setUploadError("");setUploadNotice("");
-    setPending(null);
-    try {
-      const wb=XLSX.read(await file.arrayBuffer(),{type:"array",cellDates:true});
-      if(!wb.SheetNames.length)throw new Error("O arquivo não contém abas legíveis.");
-      const parsed: Row[]=[];
-      const allColumns=new Set<string>();
-      for(const sheetName of wb.SheetNames){
-        const ws=wb.Sheets[sheetName];
-        if(!ws)continue;
-        const sheetRows=XLSX.utils.sheet_to_json<Row>(ws,{defval:"",raw:false});
-        for(const row of sheetRows){
-          if(!Object.values(row).some(value=>String(value??"").trim()!==""))continue;
-          parsed.push({...row,"__Aba de origem":sheetName});
-          Object.keys(row).forEach(key=>allColumns.add(key));
+  const importedItems=rows.length;
+  const importedSprints=new Set(rows.map(r=>str(r["Sprint"])).filter(Boolean)).size;
+  const missingOptional=OPTIONAL_SHEET_NAMES.filter(name=>!sheetNames.includes(name));
+  const qualityAlerts=useMemo(()=>{
+    if(source!=="imported")return [] as string[];
+    const alerts:string[]=[];
+    const baseMissing=BASE_COLUMNS.filter(c=>!Object.prototype.hasOwnProperty.call(rows[0]||{},c));
+    if(baseMissing.length)alerts.push("Colunas obrigatórias ausentes em Base_Itens: "+baseMissing.join(", "));
+    const ids=rows.map(r=>str(r["Issue key"])).filter(Boolean);
+    const dup=[...new Set(ids.filter((id,i)=>ids.indexOf(id)!==i))];
+    if(dup.length)alerts.push("Issue key duplicada: "+dup.length+" chave(s) — "+dup.slice(0,8).join(", "));
+    const stages=["In development","Waiting for QA","In QA review","In code review","Waiting for review"];
+    const calendar=sheetsData["Calendario_Eventos"]||[];
+    rows.forEach((r,i)=>{
+      const key=str(r["Issue key"]||"linha "+(i+1));
+      const lead=Number(str(r["Lead time (dias corridos)"]).replace(",","."));
+      const cycle=Number(str(r["Cycle time (dias corridos)"]).replace(",","."));
+      if(str(r["Lead time (dias corridos)"])&&str(r["Cycle time (dias corridos)"])&&Number.isFinite(lead)&&Number.isFinite(cycle)&&lead<cycle)alerts.push("Lead time menor que cycle time: "+key);
+      if(str(r["Cycle time (dias corridos)"])){
+        const sum=stages.reduce((total,c)=>total+(Number(str(r[c]).replace(",", "."))||0),0);
+        if(Number.isFinite(cycle)&&Math.abs(sum-cycle)>0.01)alerts.push("Soma das 5 etapas difere do cycle time: "+key);
+      }
+      const sprint=str(r["Sprint"]), completed=dateValue(r["Concluído"]);
+      const event=calendar.find(c=>str(c["Sprint"])===sprint);
+      const begin=event?dateValue(event["Início"]):null, end=event?dateValue(event["Fim"]):null;
+      if(completed&&begin&&end&&(completed<begin||completed>end))alerts.push("Data de conclusão fora da sprint: "+key);
+    });
+    return [...new Set(alerts)];
+  },[rows,sheetsData,source]);
+  useEffect(()=>{
+    try{
+      const saved=localStorage.getItem(STORE_KEY);
+      if(saved){
+        const data=JSON.parse(saved);
+        if(data&&data.source==="imported"&&Array.isArray(data.rows)){
+          setRows(data.rows);setSource("imported");setFileName(data.fileName||"Planilha salva");setSheetsData(data.sheetsData||{});setSheetNames(data.sheetNames||[]);setSnapshotDate(data.snapshotDate||"");setMapping(data.mapping||guessMap(data.rows));setUploadNotice("Dados importados restaurados do armazenamento local do navegador.");
         }
       }
-      if(!parsed.length)throw new Error("Nenhuma das abas contém linhas de dados com cabeçalhos reconhecíveis.");
-      const columns=[...allColumns];
-      const fallback=guessMap(parsed);
-      let detected=fallback;
-      let aiNote="";
-      try{
-        const response=await fetch("/api/ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-          task:"organize",
-          question:"Identifique automaticamente as colunas equivalentes às métricas ágeis e retorne somente JSON válido.",
-          columns,
-          sheetNames:wb.SheetNames,
-          data:parsed.slice(0,120)
-        })});
-        const result=await response.json();
-        if(response.ok&&result.answer){
-          const cleaned=String(result.answer).replace(/^`{3}(?:json)?\s*/i,"").replace(/\s*`{3}$/,"");
-          const inferred=JSON.parse(cleaned);
-          const valid=(value:unknown)=>typeof value==="string"&&columns.includes(value);
-          detected={
-            sprint:valid(inferred.sprint)?inferred.sprint:fallback.sprint,
-            item:valid(inferred.item)?inferred.item:fallback.item,
-            status:valid(inferred.status)?inferred.status:fallback.status,
-            squad:valid(inferred.squad)?inferred.squad:fallback.squad,
-            created:valid(inferred.created)?inferred.created:fallback.created,
-            started:valid(inferred.started)?inferred.started:fallback.started,
-            completed:valid(inferred.completed)?inferred.completed:fallback.completed,
-            storyPoints:valid(inferred.storyPoints)?inferred.storyPoints:fallback.storyPoints
-          };
-        }else aiNote=" A importação foi concluída com reconhecimento automático local porque a IA não estava disponível.";
-      }catch{aiNote=" A importação foi concluída com reconhecimento automático local porque a IA não respondeu.";}
-      setFileName(file.name);setSheetNames(wb.SheetNames);setSheet(wb.SheetNames[0]);
-      setRows(parsed);setMapping(detected);setSource("imported");setPending(null);setEditorOpen(false);setFilter("Todas as sprints");
-      setUploadNotice("Importação automática concluída: "+parsed.length+" linhas em "+wb.SheetNames.length+" abas e "+columns.length+" colunas reconhecidas."+aiNote);
+    }catch{}
+    setStorageReady(true);
+  },[]);
+  useEffect(()=>{
+    if(!storageReady)return;
+    try{
+      if(source==="imported")localStorage.setItem(STORE_KEY,JSON.stringify({source,rows,fileName,sheetsData,sheetNames,snapshotDate,mapping}));
+      else localStorage.removeItem(STORE_KEY);
+    }catch{setUploadError("Não foi possível salvar no navegador. O armazenamento local pode estar cheio ou desabilitado.");}
+  },[storageReady,source,rows,fileName,sheetsData,sheetNames,snapshotDate,mapping]);
+  async function parseFile(file: File) {
+    setUploadError("");setUploadNotice("");
+    try{
+      if(!/\.xlsx$/i.test(file.name))throw new Error("Envie um arquivo Excel .xlsx.");
+      const wb=XLSX.read(await file.arrayBuffer(),{type:"array",cellDates:true});
+      if(!wb.SheetNames.includes("Base_Itens"))throw new Error("A aba obrigatória Base_Itens não foi encontrada.");
+      const importedNames=wb.SheetNames.filter(n=>!IGNORED_SHEETS.has(n)&&(n==="Base_Itens"||OPTIONAL_SHEET_NAMES.includes(n)));
+      const baseRows=parseSheetRows(wb.Sheets["Base_Itens"],2,3);
+      if(!baseRows.length)throw new Error("A aba Base_Itens não contém linhas de dados a partir da linha 4.");
+      const missing=BASE_COLUMNS.filter(c=>!Object.keys(baseRows[0]).includes(c));
+      const normalizedRows=baseRows.map(row=>({...row,"__Status calculado":str(row["Concluído"])?"Concluído":"Em andamento"}));
+      const dataBySheet:Record<string,Row[]>={"Base_Itens":normalizedRows};
+      let snapshot="";
+      for(const name of importedNames){
+        if(name==="Base_Itens")continue;
+        const ws=wb.Sheets[name];if(!ws)continue;
+        if(name==="WIP_Aberto"){
+          const grid=XLSX.utils.sheet_to_json<unknown[]>(ws,{header:1,defval:"",raw:true,blankrows:false}) as unknown[][];
+          snapshot=str(excelCell(grid[2]?.[1],"Data do snapshot"));
+          dataBySheet[name]=parseSheetRows(ws,5,6,20);
+        }else if(name==="Premissas"){
+          dataBySheet[name]=parseSheetRows(ws,2,3,15);
+        }else{
+          let parsed=parseSheetRows(ws,2,3);
+          if(name==="DORA_Sprint")parsed=parsed.map(r=>({"Sprint":r["Sprint"]??"","Deploys na sprint":r["Deploys na sprint"]??""}));
+          dataBySheet[name]=parsed;
+        }
+      }
+      const map:MapCols={sprint:"Sprint",item:"Issue key",status:"__Status calculado",squad:"Papel",created:"Criado",started:"",completed:"Concluído",storyPoints:"Story Points"};
+      setRows(normalizedRows);setMapping(map);setSheetsData(dataBySheet);setSheetNames(importedNames);setSnapshotDate(snapshot);setFileName(file.name);setSource("imported");setActivePage("Dashboard");setEditorOpen(false);setFilter("Todas as sprints");
+      const optionalMissing=OPTIONAL_SHEET_NAMES.filter(n=>!importedNames.includes(n));
+      setUploadNotice("Importação concluída: "+normalizedRows.length+" itens, "+new Set(normalizedRows.map(r=>str(r["Sprint"])).filter(Boolean)).size+" sprints e "+Object.keys(dataBySheet).length+" abas de dados. "+(missing.length?"Colunas obrigatórias ausentes: "+missing.join(", ")+". ":"")+(optionalMissing.length?"Abas opcionais ausentes: "+optionalMissing.join(", ")+".":""));
       setSourceOpen(true);
-    } catch(e) {setPending(null);setUploadError(e instanceof Error?e.message:"Não foi possível processar o arquivo.");}
-  }
-  async function changeSheet(name: string) {
-    setSheet(name); const f=fileRef.current?.files?.[0]; if(!f)return;
-    try {const wb=XLSX.read(await f.arrayBuffer(),{type:"array"});const data=XLSX.utils.sheet_to_json<Row>(wb.Sheets[name],{defval:"",raw:false});if(!data.length)throw new Error("A aba não contém linhas de dados.");setPending(data);setMapping(guessMap(data));setUploadError("");}
-    catch(e){setPending(null);setUploadError(e instanceof Error?e.message:"Não foi possível ler a aba.");}
-  }
-  function confirmImport() {
-    if(!pending)return;if(!mapping.sprint||!mapping.status){setUploadError("Mapeie Sprint e Status antes de confirmar.");return;}
-    setRows(pending);setSource("imported");setPending(null);setSourceOpen(false);setEditorOpen(false);setFilter("Todas as sprints");setUploadError("");
+    }catch(e){setUploadError(e instanceof Error?e.message:"Não foi possível ler a planilha.");}
   }
   function updateCell(rowIndex:number, column:string, value:string) {
     setRows(current=>current.map((row,index)=>index===rowIndex?({...row,[column]:value}):row));
   }
   return <main className="ap-shell">
-    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className="ap-nav active"><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(sourceOpen?"active":"")} onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button><div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
+    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className={"ap-nav "+(activePage==="Dashboard"?"active":"")} onClick={()=>setActivePage("Dashboard")}><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(sourceOpen?"active":"")} onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button>{source==="imported"&&<><div className="ap-nav-label">ABAS DA PLANILHA</div>{["Base_Itens",...OPTIONAL_SHEET_NAMES].map(name=><button key={name} className={"ap-nav ap-subnav "+(activePage===name?"active":"")} onClick={()=>setActivePage(name)}>{name}{!sheetNames.includes(name)&&<span className="ap-missing-dot">!</span>}</button>)}</>}<div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
     <section className="ap-main">
     <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">MÉTRICAS DE FLUXO</div><h1>Throughput <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>Acompanhe o ritmo de entrega e explore os itens concluídos por sprint.</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
-    {sourceOpen&&<section className="ap-panel ap-import"><div className="ap-panel-heading"><div><h2>Fontes de Dados</h2><p>Excel ou CSV · a IA identifica os campos e importa automaticamente todas as abas.</p></div><button className="ap-icon-button" onClick={()=>{setSourceOpen(false);setPending(null);}}><X size={18}/></button></div>
-    <div className="ap-dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f)void parseFile(f);}}><FileUp size={26}/><strong>Selecione sua planilha</strong><span>Arraste o arquivo ou escolha no computador</span><small>.xlsx · .xls · .csv</small><input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={e=>{const f=e.target.files?.[0];if(f)void parseFile(f);}}/><button className="ap-button ap-primary" onClick={()=>fileRef.current?.click()}>Escolher arquivo</button></div>
+    {sourceOpen&&<section className="ap-panel ap-import"><div className="ap-panel-heading"><div><h2>Fontes de Dados</h2><p>Excel .xlsx · leitura das linhas e abas conforme o modelo da planilha.</p></div><button className="ap-icon-button" onClick={()=>{setSourceOpen(false);setPending(null);}}><X size={18}/></button></div>
+    <div className="ap-dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f)void parseFile(f);}}><FileUp size={26}/><strong>Selecione sua planilha</strong><span>Arraste o arquivo ou escolha no computador</span><small>Excel .xlsx · todas as abas de dados</small><input ref={fileRef} type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0];if(f)void parseFile(f);}}/><button className="ap-button ap-primary" onClick={()=>fileRef.current?.click()}>Escolher arquivo</button></div>
     {uploadError&&<div className="ap-error"><AlertCircle size={16}/>{uploadError}</div>}{uploadNotice&&<div className="ap-note">{uploadNotice}</div>}
-    {pending&&<div className="ap-mapping"><div className="ap-file-info"><FileSpreadsheet size={20}/><div><strong>{fileName}</strong><span>{pending.length} linhas · {headers.length} colunas · prévia</span></div></div>{sheetNames.length>1&&<label className="ap-field">Aba do Excel<select value={sheet} onChange={e=>void changeSheet(e.target.value)}>{sheetNames.map(n=><option key={n}>{n}</option>)}</select></label>}
-    <div className="ap-mapping-grid">{([{key:"sprint",label:"Sprint *"},{key:"item",label:"Identificador do item"},{key:"status",label:"Status *"},{key:"squad",label:"Squad (opcional)"},{key:"created",label:"Data de criação (Lead Time)"},{key:"started",label:"Data de início (Cycle Time)"},{key:"completed",label:"Data de conclusão (Lead/Cycle Time)"},{key:"storyPoints",label:"Story Points (Velocity)"}] as const).map(f=><label className="ap-field" key={f.key}>{f.label}<select value={mapping[f.key]} onChange={e=>setMapping(m=>({...m,[f.key]:e.target.value}))}><option value="">Não selecionada</option>{headers.map(h=><option key={h}>{h}</option>)}</select></label>)}</div>
-    <label className="ap-field">Status que representam conclusão (separados por vírgula)<input value={statusText} onChange={e=>setStatusText(e.target.value)}/></label><div className="ap-preview"><strong>Prévia dos dados</strong><div className="ap-table-scroll"><table><thead><tr>{headers.slice(0,7).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{pending.slice(0,5).map((r,i)=><tr key={i}>{headers.slice(0,7).map(h=><td key={h}>{str(r[h])||"—"}</td>)}</tr>)}</tbody></table></div></div>
-    <div className="ap-import-actions"><button className="ap-button ap-secondary" onClick={()=>{setPending(null);setUploadError("");}}>Cancelar</button><button className="ap-button ap-primary" onClick={confirmImport}><Check size={16}/> Confirmar importação</button></div></div>}
-    <p className="ap-note">Todas as abas e linhas são processadas no navegador; a IA ajuda a identificar as colunas. O arquivo não é salvo em banco compartilhado.</p></section>}
+    <p className="ap-note">A aba Base_Itens alimenta os gráficos. Abas opcionais habilitam páginas próprias; as abas calculadas são ignoradas. O arquivo e as edições ficam no navegador.</p></section>}
+    {source==="imported"&&<div className="ap-imported-counts"><div><span>ITENS IMPORTADOS</span><strong>{importedItems}</strong></div><div><span>SPRINTS IMPORTADAS</span><strong>{importedSprints}</strong></div>{snapshotDate&&<div><span>SNAPSHOT WIP</span><strong>{snapshotDate}</strong></div>}</div>}
+    {source==="imported"&&<section className="ap-panel ap-quality-panel"><div className="ap-panel-heading"><div><h2><AlertCircle size={17}/> Alertas de qualidade</h2><p>Validações calculadas a partir das abas de dados.</p></div><span className="ap-quality-count">{qualityAlerts.length} alerta(s)</span></div>{qualityAlerts.length?<ul>{qualityAlerts.map((alert,i)=><li key={i}>{alert}</li>)}</ul>:<p className="ap-note">Nenhum problema identificado nas validações disponíveis.</p>}</section>}
+    {activePage!=="Dashboard"&&<section className="ap-panel ap-data-page"><div className="ap-panel-heading"><div><h2>{activePage}</h2><p>{activePage==="WIP_Aberto"&&snapshotDate?"Snapshot em "+snapshotDate:"Dados lidos diretamente da aba "+activePage}</p></div><span>{(sheetsData[activePage]||[]).length} linhas</span></div>{!sheetNames.includes(activePage)?<div className="ap-empty">Esta página depende da aba <strong>{activePage}</strong>. Envie a aba {activePage} no arquivo Excel para habilitá-la.</div>:<div className="ap-table-scroll"><table><thead><tr>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{(sheetsData[activePage]||[]).map((row,i)=><tr key={i}>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><td key={h}>{str(row[h])||"—"}</td>)}</tr>)}</tbody></table></div>}</section>}
+    {activePage==="Dashboard"&&source==="imported"&&missingOptional.length>0&&<section className="ap-panel ap-missing-sheets"><strong>Abas opcionais não encontradas</strong><p>Envie as seguintes abas para habilitar suas páginas: {missingOptional.join(", ")}.</p></section>}
     <div className="ap-source-strip"><div className="ap-source-icon"><Database size={18}/></div><div><strong>{source==="demo"?"Dados demonstrativos (fictícios)":fileName}</strong><span>{source==="demo"?"Exemplo ilustrativo · não representa dados reais":"Dados ativos nesta sessão do navegador"}</span></div><div className="ap-source-state"><Check size={13}/>{source==="demo"?"Exemplo ativo":"Importação confirmada"} <button onClick={()=>setSourceOpen(true)}>Gerenciar</button></div><button className="ap-button ap-secondary ap-edit-toggle" onClick={()=>setEditorOpen(v=>!v)}><FileSpreadsheet size={15}/>{editorOpen?"Ocultar dados":"Visualizar e editar dados"}</button></div>
     {editorOpen&&<section className="ap-panel ap-data-editor"><div className="ap-panel-heading"><div><div><h2>Dados carregados</h2><p>Edite qualquer célula. Os gráficos e indicadores são recalculados automaticamente.</p></div></div><button className="ap-icon-button" onClick={()=>setEditorOpen(false)} aria-label="Fechar editor"><X size={18}/></button></div><div className="ap-editor-meta">{rows.length} linhas · {Object.keys(rows[0]||{}).length} colunas · alterações aplicadas em tempo real</div><div className="ap-table-scroll ap-edit-table"><table><thead><tr>{Object.keys(rows[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((row,rowIndex)=><tr key={rowIndex}>{Object.keys(rows[0]||{}).map(column=><td key={column}><input aria-label={`Linha ${rowIndex+1}, ${column}`} title={`${column} · linha ${rowIndex+1}`} value={str(row[column])} onChange={e=>updateCell(rowIndex,column,e.target.value)}/></td>)}</tr>)}</tbody></table></div><p className="ap-note"><AlertCircle size={14}/>As edições ficam nesta sessão do navegador. Para manter alterações fora desta sessão, exporte ou salve os dados em um arquivo.</p></section>}
+    {activePage==="Dashboard"&&<>
     <section className="ap-chart-card"><div className="ap-chart-heading"><div><div className="ap-chart-title"><Activity size={20}/><h2>Itens concluídos por sprint</h2></div><p>Quantidade de itens que atingiram um status de conclusão em cada sprint.</p></div></div>
     <div className="ap-summary"><div><span>ITENS CONCLUÍDOS</span><strong>{stats.total}<small> itens</small></strong></div><div><span>MÉDIA POR SPRINT</span><strong>{stats.mean.toFixed(1)}<small> itens</small></strong></div><div><span>SPRINTS NO HISTÓRICO</span><strong>{stats.labels}</strong></div><div className="ap-quality"><i/>{quality?quality+" alerta(s) de qualidade":"Sem alertas de qualidade"}</div></div>
     <div className="ap-chart-controls"><span><i/> Itens concluídos</span><label>Visualização <select value={filter} onChange={e=>setFilter(e.target.value)}><option>Todas as sprints</option>{stats.counts.map(s=><option key={s.sprint}>{s.sprint}</option>)}</select></label></div>
@@ -266,7 +333,7 @@ function AgilePulse() {
       <MetricChart title="Lead Time" description="Tempo médio entre a criação da demanda e sua conclusão, agrupado por sprint." data={chartRows} dataKey="leadTime" unit="dias" color="#a78bfa" metricKey="leadTime" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName} unavailable={mapping.created && mapping.completed ? "Não há datas válidas de criação e conclusão para calcular o Lead Time." : "Mapeie as colunas Data de criação e Data de conclusão na importação para calcular o Lead Time."}/>
       <MetricChart title="Cycle Time" description="Tempo médio entre o início efetivo do trabalho e a conclusão, agrupado por sprint." data={chartRows} dataKey="cycleTime" unit="dias" color="#38bdf8" metricKey="cycleTime" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName} unavailable={mapping.started && mapping.completed ? "Não há datas válidas de início e conclusão para calcular o Cycle Time." : "Mapeie as colunas Data de início e Data de conclusão na importação para calcular o Cycle Time."}/>
       <MetricChart title="Velocity" description="Soma dos Story Points dos itens concluídos em cada sprint." data={chartRows} dataKey="velocity" unit="pontos" color="#34d399" metricKey="velocity" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName} unavailable={mapping.storyPoints ? "Não há Story Points numéricos válidos nos itens concluídos." : "Mapeie a coluna Story Points na importação para calcular a Velocity."}/>
-    </div>
+    </div>}
     </div></section>
   </main>;
 }
