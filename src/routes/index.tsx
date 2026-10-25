@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Bar, BarChart, CartesianGrid, ComposedChart, Line, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import * as XLSX from "xlsx";
 import { Activity, AlertCircle, Check, ChevronDown, Database, FileSpreadsheet, FileUp, MessageCircle, Send, Sparkles, X } from "lucide-react";
 
@@ -269,6 +269,87 @@ function FlowChart({title,description,data,fullData,kind,unavailable}:{title:str
   </section>;
 }
 
+
+const WIP_STAGES=["In development","Waiting for QA","In QA review","In code review","Waiting for review"];
+const WIP_STAGE_COLORS:Record<string,string>={"In development":"#60a5fa","Waiting for QA":"#f59e0b","In QA review":"#a78bfa","In code review":"#2dd4bf","Waiting for review":"#fb923c"};
+function findField(row:Row,patterns:RegExp[]):string { return Object.keys(row).find(k=>patterns.some(p=>p.test(normalize(k))))||""; }
+function getWipItems(rows:Row[],snapshotDate:string) {
+  const sample=rows[0]||{};
+  const keyField=findField(sample,[/^issue key$/,/issue.*key/,/^chave$/]);
+  const stageField=findField(sample,[/^etapa atual$/,/etapa.*atual/,/^current stage$/,/^stage$/,/^etapa$/]);
+  const startField=findField(sample,[/data.*inicio/,/inicio.*data/,/start date/,/started at/,/inicio da etapa/,/data de entrada/]);
+  const roleField=findField(sample,[/^papel$/, /papel responsavel/,/^role$/]);
+  const summaryField=findField(sample,[/^resumo$/, /^summary$/]);
+  const snap=dateValue(snapshotDate);
+  return rows.map((r,i)=>{
+    const start=dateValue(r[startField]);
+    const age=snap&&start&&snap>=start?Math.floor((snap.getTime()-start.getTime())/86400000):null;
+    const stage=str(r[stageField]);
+    return {key:str(r[keyField])||"Item "+(i+1),summary:str(r[summaryField]),stage,role:str(r[roleField])||"—",start:start?str(r[startField]):"",age,stageField,startField,keyField,roleField};
+  }).filter(r=>!!r.key||!!r.stage||r.age!==null).sort((a,b)=>(b.age??-1)-(a.age??-1));
+}
+function wipReference(rows:Row[]) {
+  const valid=rows.map(r=>({sprint:str(r["Sprint"]),n:numeric(r["Sprint nº"])??sprintNum(str(r["Sprint"])),cycle:numeric(r["Cycle time (dias corridos)"])})).filter(r=>r.sprint&&r.n!==Number.MAX_SAFE_INTEGER);
+  const sprints=[...new Set(valid.map(r=>r.sprint))].sort((a,b)=>sprintNum(a)-sprintNum(b)||a.localeCompare(b,"pt-BR",{numeric:true}));
+  const last3=sprints.slice(-3);
+  const cycleValues=valid.filter(r=>last3.includes(r.sprint)&&r.cycle!==null&&r.cycle>=0).map(r=>r.cycle as number);
+  const cycleMean=cycleValues.length?cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length:null;
+  const latest=sprints[sprints.length-1]||"";
+  const latestRows=rows.filter(r=>str(r["Sprint"])===latest);
+  const completed=latestRows.filter(isCompletedRow);
+  const throughput=completed.length;
+  const leads=completed.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
+  return {cycleMean,alertLimit:cycleMean===null?null:cycleMean*2,latestSprint:latest,throughput,leadMean:leads.length?leads.reduce((a,b)=>a+b,0)/leads.length:null,expected:leads.length?(throughput/14)*(leads.reduce((a,b)=>a+b,0)/leads.length):null};
+}
+function WipAgeTooltip({active,payload}:{active?:boolean;payload?:any[]}) {
+  if(!active||!payload?.length)return null;
+  const r=payload[0].payload;
+  return <div style={{background:"#101d33",border:"1px solid #304565",borderRadius:10,padding:"10px 12px",color:"#f1f5ff",fontSize:12}}>
+    <strong>{r.key}</strong><div style={{marginTop:5}}>Etapa: {r.stage||"Não informada"}</div><div>Idade: {r.age===null?"Sem data":r.age+" dias corridos"}</div><div>Papel: {r.role}</div>
+  </div>;
+}
+function WipAgingPage({rows,snapshotDate,baseRows,source}:{rows:Row[];snapshotDate:string;baseRows:Row[];source:"demo"|"imported"}) {
+  const items=useMemo(()=>getWipItems(rows,snapshotDate),[rows,snapshotDate]);
+  const ref=useMemo(()=>wipReference(baseRows),[baseRows]);
+  const limit=ref.alertLimit;
+  const alertCount=items.filter(i=>i.age!==null&&limit!==null&&i.age>limit).length;
+  const latestWip=items.length;
+  const difference=ref.expected===null?null:latestWip-ref.expected;
+  const stageField=items[0]?.stageField||"";
+  const startField=items[0]?.startField||"";
+  const hasWipRows=rows.length>0;
+  return <div className="ap-wip-page">
+    <div className="ap-wip-top-grid">
+      <section className="ap-panel ap-wip-panel">
+        <div className="ap-panel-heading"><div><h2>WIP e Aging</h2><p>Itens em andamento no snapshot e tempo desde o início, em dias corridos.</p></div><span className="ap-wip-date">{snapshotDate||"Snapshot não informado"}</span></div>
+        <div className="ap-wip-kpis"><div><span>DATA DO SNAPSHOT</span><strong>{snapshotDate||"—"}</strong></div><div><span>WIP ATUAL</span><strong>{latestWip}<small> itens</small></strong></div><div className={alertCount?"ap-wip-alert-kpi":""}><span>ITENS EM ALERTA</span><strong>{alertCount}<small> itens</small></strong></div></div>
+        {!hasWipRows?<div className="ap-empty">Envie a aba <strong>WIP_Aberto</strong> para habilitar esta página.</div>:!stageField||!startField?<div className="ap-empty">Não encontrei as colunas de etapa atual e/ou data de início na aba WIP_Aberto. Confira os cabeçalhos da planilha.</div>:!snapshotDate?<div className="ap-empty">A célula B3 da aba WIP_Aberto deve conter a data do snapshot para calcular a idade dos itens.</div>:<>
+          <div className="ap-wip-chart-heading"><div><strong>Idade dos itens em andamento</strong><span>Do mais velho ao mais novo · linha de alerta: {limit===null?"indisponível":limit.toFixed(1)+" dias corridos"}</span></div><div className="ap-wip-stage-legend">{WIP_STAGES.map(s=><span key={s}><i style={{background:WIP_STAGE_COLORS[s]}}/>{s}</span>)}</div></div>
+          <div className="ap-wip-chart-scroll"><div style={{height:Math.max(180,items.length*42),minWidth:640}}><ResponsiveContainer width="100%" height="100%"><BarChart data={items} layout="vertical" margin={{top:10,right:35,left:22,bottom:10}} barCategoryGap="22%">
+            <CartesianGrid stroke="#263853" strokeDasharray="3 5" horizontal={false}/>
+            <XAxis type="number" tick={{fill:"#91a4c4",fontSize:10}} axisLine={{stroke:"#31435f"}} tickLine={false} label={{value:"Idade (dias corridos)",position:"insideBottom",offset:-4,fill:"#91a4c4",fontSize:10}}/>
+            <YAxis type="category" dataKey="key" width={100} tick={{fill:"#cbd8ed",fontSize:10}} axisLine={false} tickLine={false} />
+            <Tooltip content={<WipAgeTooltip/>}/>
+            {limit!==null&&<ReferenceLine x={limit} stroke="#f87171" strokeWidth={2} strokeDasharray="6 4" label={{value:"Limite de alerta",position:"top",fill:"#f87171",fontSize:10}}/>}
+            <Bar dataKey="age" name="Idade (dias corridos)" maxBarSize={24} radius={[0,5,5,0]} isAnimationActive={false}>
+              {items.map((item,i)=><Cell key={item.key+"-"+i} fill={item.age!==null&&limit!==null&&item.age>limit?"#ef4444":WIP_STAGE_COLORS[item.stage]||"#8293ad"}/>)}
+            </Bar>
+          </BarChart></ResponsiveContainer></div></div>
+          <div className="ap-table-scroll ap-wip-table"><table><thead><tr><th>Issue key</th><th>Etapa</th><th>Idade</th><th>Papel</th></tr></thead><tbody>{items.map((item,i)=><tr key={item.key+"-"+i}><td>{item.key}</td><td><span className="ap-wip-stage"><i style={{background:WIP_STAGE_COLORS[item.stage]||"#8293ad"}}/>{item.stage||"—"}</span></td><td className={item.age!==null&&limit!==null&&item.age>limit?"ap-wip-age-alert":""}>{item.age===null?"Sem data":item.age+" dias corridos"}</td><td>{item.role}</td></tr>)}</tbody></table></div>
+        </>}
+      </section>
+      <section className="ap-panel ap-little-panel">
+        <div className="ap-panel-heading"><div><h2>Lei de Little</h2><p>WIP observado versus WIP estimado pelo fluxo recente.</p></div></div>
+        <div className="ap-little-formula">WIP estimado = (Throughput da última sprint ÷ 14) × Lead Time médio da última sprint</div>
+        <div className="ap-little-compare"><div><span>WIP ATUAL</span><strong>{latestWip}</strong><small>itens</small></div><div><span>WIP ESTIMADO</span><strong>{ref.expected===null?"—":ref.expected.toFixed(1)}</strong><small>itens</small></div></div>
+        <div className={"ap-little-difference "+(difference!==null&&difference>0?"is-high":difference!==null&&difference<0?"is-low":"")}><span>Diferença (atual − estimado)</span><strong>{difference===null?"—":(difference>0?"+":"")+difference.toFixed(1)+" itens"}</strong></div>
+        <div className="ap-little-details"><div><span>Última sprint</span><strong>{ref.latestSprint||"—"}</strong></div><div><span>Throughput</span><strong>{ref.throughput} itens</strong></div><div><span>Lead Time médio</span><strong>{ref.leadMean===null?"—":ref.leadMean.toFixed(1)+" dias corridos"}</strong></div><div><span>Cycle Time médio · últimas 3 sprints</span><strong>{ref.cycleMean===null?"—":ref.cycleMean.toFixed(1)+" dias corridos"}</strong></div><div><span>Limite de alerta · 2× Cycle Time</span><strong>{limit===null?"—":limit.toFixed(1)+" dias corridos"}</strong></div></div>
+        {source==="demo"&&<p className="ap-note">Os dados demonstrativos atuais não incluem a aba WIP_Aberto. Importe a planilha para visualizar o aging real.</p>}
+      </section>
+    </div>
+  </div>;
+}
+
 function AgilePulse() {
   const [rows,setRows]=useState<Row[]>(demo), [source,setSource]=useState<"demo"|"imported">("demo"), [fileName,setFileName]=useState("");
   const [sheetsData,setSheetsData]=useState<Record<string,Row[]>>({});
@@ -373,7 +454,7 @@ function AgilePulse() {
     setSheetsData(current=>({...current,Base_Itens:(current.Base_Itens||[]).map((row,index)=>index===rowIndex?({...row,[column]:value}):row)}));
   }
   return <main className="ap-shell">
-    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className={"ap-nav "+(activePage==="Dashboard"?"active":"")} onClick={()=>setActivePage("Dashboard")}><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(sourceOpen?"active":"")} onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button>{source==="imported"&&<><div className="ap-nav-label">ABAS DA PLANILHA</div>{["Base_Itens",...OPTIONAL_SHEET_NAMES].map(name=><button key={name} className={"ap-nav ap-subnav "+(activePage===name?"active":"")} onClick={()=>setActivePage(name)}>{name}{!sheetNames.includes(name)&&<span className="ap-missing-dot">!</span>}</button>)}</>}<div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
+    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className={"ap-nav "+(activePage==="Dashboard"?"active":"")} onClick={()=>setActivePage("Dashboard")}><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(activePage==="WIP e Aging"?"active":"")} onClick={()=>setActivePage("WIP e Aging")}><Activity size={18}/> WIP e Aging</button><button className={"ap-nav "+(sourceOpen?"active":"") onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button>{source==="imported"&&<><div className="ap-nav-label">ABAS DA PLANILHA</div>{["Base_Itens",...OPTIONAL_SHEET_NAMES].map(name=><button key={name} className={"ap-nav ap-subnav "+(activePage===name?"active":"")} onClick={()=>setActivePage(name)}>{name}{!sheetNames.includes(name)&&<span className="ap-missing-dot">!</span>}</button>)}</>}<div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
     <section className="ap-main">
     <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">MÉTRICAS DE FLUXO</div><h1>Throughput <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>Acompanhe o ritmo de entrega e explore os itens concluídos por sprint.</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
     {sourceOpen&&<section className="ap-panel ap-import"><div className="ap-panel-heading"><div><h2>Fontes de Dados</h2><p>Excel .xlsx · leitura das linhas e abas conforme o modelo da planilha.</p></div><button className="ap-icon-button" onClick={()=>{setSourceOpen(false);}}><X size={18}/></button></div>
@@ -382,7 +463,8 @@ function AgilePulse() {
     <p className="ap-note">A aba Base_Itens alimenta os gráficos. Abas opcionais habilitam páginas próprias; as abas calculadas são ignoradas. O arquivo e as edições ficam no navegador.</p></section>}
     {source==="imported"&&<div className="ap-imported-counts"><div><span>ITENS IMPORTADOS</span><strong>{importedItems}</strong></div><div><span>SPRINTS IMPORTADAS</span><strong>{importedSprints}</strong></div>{snapshotDate&&<div><span>SNAPSHOT WIP</span><strong>{snapshotDate}</strong></div>}</div>}
     {source==="imported"&&<section className="ap-panel ap-quality-panel"><div className="ap-panel-heading"><div><h2><AlertCircle size={17}/> Alertas de qualidade</h2><p>Validações calculadas a partir das abas de dados.</p></div><span className="ap-quality-count">{qualityAlerts.length} alerta(s)</span></div>{qualityAlerts.length?<ul>{qualityAlerts.map((alert,i)=><li key={i}>{alert}</li>)}</ul>:<p className="ap-note">Nenhum problema identificado nas validações disponíveis.</p>}</section>}
-    {activePage!=="Dashboard"&&<section className="ap-panel ap-data-page"><div className="ap-panel-heading"><div><h2>{activePage}</h2><p>{activePage==="WIP_Aberto"&&snapshotDate?"Snapshot em "+snapshotDate:"Dados lidos diretamente da aba "+activePage}</p></div><span>{(sheetsData[activePage]||[]).length} linhas</span></div>{!sheetNames.includes(activePage)?<div className="ap-empty">Esta página depende da aba <strong>{activePage}</strong>. Envie a aba {activePage} no arquivo Excel para habilitá-la.</div>:<div className="ap-table-scroll"><table><thead><tr>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{(sheetsData[activePage]||[]).map((row,i)=><tr key={i}>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><td key={h}>{str(row[h])||"—"}</td>)}</tr>)}</tbody></table></div>}</section>}
+    {activePage==="WIP e Aging"&&<WipAgingPage rows={sheetsData["WIP_Aberto"]||[]} snapshotDate={snapshotDate} baseRows={rows} source={source}/>}
+    {activePage!=="Dashboard"&&activePage!=="WIP e Aging"&&<section className="ap-panel ap-data-page"><div className="ap-panel-heading"><div><h2>{activePage}</h2><p>{activePage==="WIP_Aberto"&&snapshotDate?"Snapshot em "+snapshotDate:"Dados lidos diretamente da aba "+activePage}</p></div><span>{(sheetsData[activePage]||[]).length} linhas</span></div>{!sheetNames.includes(activePage)?<div className="ap-empty">Esta página depende da aba <strong>{activePage}</strong>. Envie a aba {activePage} no arquivo Excel para habilitá-la.</div>:<div className="ap-table-scroll"><table><thead><tr>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{(sheetsData[activePage]||[]).map((row,i)=><tr key={i}>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><td key={h}>{str(row[h])||"—"}</td>)}</tr>)}</tbody></table></div>}</section>}
     {activePage==="Dashboard"&&source==="imported"&&missingOptional.length>0&&<section className="ap-panel ap-missing-sheets"><strong>Abas opcionais não encontradas</strong><p>Envie as seguintes abas para habilitar suas páginas: {missingOptional.join(", ")}.</p></section>}
     <div className="ap-source-strip"><div className="ap-source-icon"><Database size={18}/></div><div><strong>{source==="demo"?"Dados demonstrativos (fictícios)":fileName}</strong><span>{source==="demo"?"Exemplo ilustrativo · não representa dados reais":"Dados ativos nesta sessão do navegador"}</span></div><div className="ap-source-state"><Check size={13}/>{source==="demo"?"Exemplo ativo":"Importação confirmada"} <button onClick={()=>setSourceOpen(true)}>Gerenciar</button></div><button className="ap-button ap-secondary ap-edit-toggle" onClick={()=>setEditorOpen(v=>!v)}><FileSpreadsheet size={15}/>{editorOpen?"Ocultar dados":"Visualizar e editar dados"}</button></div>
     {editorOpen&&<section className="ap-panel ap-data-editor"><div className="ap-panel-heading"><div><div><h2>Dados carregados</h2><p>Edite qualquer célula. Os gráficos e indicadores são recalculados automaticamente.</p></div></div><button className="ap-icon-button" onClick={()=>setEditorOpen(false)} aria-label="Fechar editor"><X size={18}/></button></div><div className="ap-editor-meta">{rows.length} linhas · {Object.keys(rows[0]||{}).length} colunas · alterações aplicadas em tempo real</div><div className="ap-table-scroll ap-edit-table"><table><thead><tr>{Object.keys(rows[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((row,rowIndex)=><tr key={rowIndex}>{Object.keys(rows[0]||{}).map(column=><td key={column}><input aria-label={`Linha ${rowIndex+1}, ${column}`} title={`${column} · linha ${rowIndex+1}`} value={str(row[column])} onChange={e=>updateCell(rowIndex,column,e.target.value)}/></td>)}</tr>)}</tbody></table></div><p className="ap-note"><AlertCircle size={14}/>As edições ficam nesta sessão do navegador. Para manter alterações fora desta sessão, exporte ou salve os dados em um arquivo.</p></section>}
