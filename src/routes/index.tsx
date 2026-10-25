@@ -219,21 +219,22 @@ function numeric(v:unknown):number|null { const n=Number(str(v).replace(",",".")
 function isCompletedRow(r:Row):boolean { return !!str(r["Concluído"]) || (str(r["Issue Status"]) ? completedDefaults.some(s=>normalize(s)===normalize(r["Issue Status"])) : !!str(r["Resolution Date"])); }
 function buildFlowSeries(rows:Row[], calendar:Row[]) {
   const eventForSprint=(sprint:string)=>calendar.find(r=>sameSprint(r["Sprint"],sprint));
+  const actualLabels=[...new Set([...rows.map(r=>str(r["Sprint"])),...calendar.map(r=>str(r["Sprint"]))].filter(Boolean))]
+    .sort((a,b)=>sprintNum(a)-sprintNum(b)||a.localeCompare(b,"pt-BR",{numeric:true}));
+  const labels=actualLabels.length?actualLabels:SPRINT_OPTIONS;
   const allLead=rows.filter(isCompletedRow).map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
   const overallP85=inclusiveP85(allLead);
   const overallLeadMean=allLead.length?allLead.reduce((sum,v)=>sum+v,0)/allLead.length:null;
-  return SPRINT_OPTIONS.map((sprint,i)=>{
+  return labels.map((sprint,i)=>{
     const items=rows.filter(r=>sameSprint(r["Sprint"],sprint));
     const completed=items.filter(isCompletedRow);
     const leadValues=completed.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
     const cycleValues=completed.map(r=>numeric(r["Cycle time (dias corridos)"])??elapsedDays(r["In development"]??r["Development Start Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
     const noReopen=completed.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
     const reopened=completed.filter(r=>(numeric(r["Reaberturas"])??0)>0).length;
-    const lead=leadValues.length?leadValues.reduce((a,b)=>a+b,0)/leadValues.length:null;
-    const cycle=cycleValues.length?cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length:null;
-    const velocity=completed.reduce((sum,r)=>sum+(numeric(r["Story Points"])??0),0);
+    const velocity=completed.reduce((sum,r)=>sum+(numeric(r["Story Points Sprint"])??numeric(r["Story Points"])??0),0);
     const ev=eventForSprint(sprint);
-    return {sprint,sprintIndex:i+1,totalItems:items.length,noReopen,reopened,leadTime:lead,leadP85:inclusiveP85(leadValues),cycleTime:cycle,efficiency:lead!==null&&lead>0&&cycle!==null?(cycle/lead)*100:null,velocity,phase:str(ev?.["Fase"]),context:str(ev?.["Evento / contexto"]),leadP85General:overallP85,leadMeanGeneral:overallLeadMean,leadCount:leadValues.length,cycleCount:cycleValues.length,throughput:noReopen+reopened};
+    return {sprint,sprintIndex:i+1,totalItems:items.length,noReopen,reopened,leadTime:leadValues.length?leadValues.reduce((a,b)=>a+b,0)/leadValues.length:null,leadP85:inclusiveP85(leadValues),cycleTime:cycleValues.length?cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length:null,efficiency:leadValues.length&&cycleValues.length&&leadValues.reduce((a,b)=>a+b,0)>0?(cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length)/(leadValues.reduce((a,b)=>a+b,0)/leadValues.length)*100:null,velocity,phase:str(ev?.["Fase"]),context:str(ev?.["Evento / contexto"]),leadP85General:overallP85,leadMeanGeneral:overallLeadMean,leadCount:leadValues.length,cycleCount:cycleValues.length,throughput:noReopen+reopened};
   });
 }
 function FlowTooltip({active,payload,label}:any) {
@@ -824,7 +825,7 @@ function AgilePulse() {
   const stats=useMemo(()=>calculate(rows,mapping,statuses),[rows,mapping,statusText]);
   const calendarRows=sheetsData["Calendario_Eventos"]||[];
   const flowSeries=useMemo(()=>buildFlowSeries(rows,calendarRows),[rows,calendarRows]);
-  const chartRows=filter==="Todas"?flowSeries:flowSeries.filter(s=>s.sprint===filter);
+  const chartRows=filter==="Todas"?flowSeries:flowSeries.filter(s=>sameSprint(s.sprint,filter));
   const importedItems=rows.length;
   const importedSprints=new Set(rows.map(r=>str(r["Sprint"])).filter(Boolean)).size;
   const missingOptional=OPTIONAL_SHEET_NAMES.filter(name=>!sheetNames.includes(name));
