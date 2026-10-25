@@ -350,6 +350,127 @@ function WipAgingPage({rows,snapshotDate,baseRows,source}:{rows:Row[];snapshotDa
   </div>;
 }
 
+
+const DEFECT_ORIGINS=["QA interno","Code review","Produção (achado pelo time)","Escola-piloto"];
+const QUALITY_COLORS:Record<string,string>={"QA interno":"#38bdf8","Code review":"#a78bfa","Produção (achado pelo time)":"#fb923c","Escola-piloto":"#f87171"};
+const QUALITY_PHASES=[{label:"Todas",min:1,max:20},{label:"S1–S3",min:1,max:3},{label:"S4–S10",min:4,max:10},{label:"S11–S17",min:11,max:17},{label:"S18–S20",min:18,max:20}];
+function premiseValue(rows:Row[],patterns:RegExp[]):number|null {
+  const row=rows.find(r=>patterns.some(p=>p.test(normalize(r["Parâmetro"]??r["Parametro"]??r["Parâmetro / indicador"]??""))));
+  if(!row)return null;
+  const raw=row["Valor"]??row["valor"];
+  if(typeof raw==="number"&&Number.isFinite(raw))return raw;
+  const match=str(raw).replace(/\s/g,"").replace(/R\$/i,"").match(/-?\d+(?:[.,]\d+)?/);
+  if(!match)return null;
+  const value=Number(match[0].replace(",","."));
+  return Number.isFinite(value)?value:null;
+}
+function qualitySprintNum(row:Row,field:string) { return sprintNum(str(row[field])); }
+function QualityTooltip({active,payload,label}:{active?:boolean;payload?:any[];label?:string}) {
+  if(!active||!payload?.length)return null;
+  return <div style={{background:"#101d33",border:"1px solid #304565",borderRadius:10,padding:"10px 12px",color:"#f1f5ff",fontSize:11}}>
+    <strong>{label}</strong>{payload.map((p,i)=><div key={String(p.dataKey)+i} style={{marginTop:5,color:p.color||"#dce7f8"}}>{p.name||p.dataKey}: {typeof p.value==="number"?p.value.toLocaleString("pt-BR",{maximumFractionDigits:2}):String(p.value??"—")}{String(p.dataKey).toLowerCase().includes("rate")||String(p.dataKey).toLowerCase().includes("percent")||String(p.dataKey).toLowerCase().includes("acumulado")?"%":""}</div>)}
+  </div>;
+}
+function QualityLegend({items}:{items:{label:string;color:string}[]}) {
+  return <div className="ap-quality-legend">{items.map(item=><span key={item.label}><i style={{background:item.color}}/>{item.label}</span>)}</div>;
+}
+function QualityReworkPage({defects,rework,calendar,premises,baseRows,source}:{defects:Row[];rework:Row[];calendar:Row[];premises:Row[];baseRows:Row[];source:"demo"|"imported"}) {
+  const [phase,setPhase]=useState("Todas");
+  const defectTarget=premiseValue(premises,[/meta.*taxa.*defeit/,/taxa.*defeit.*meta/]);
+  const escapeTarget=premiseValue(premises,[/meta.*taxa.*escape/,/taxa.*escape.*meta/,/meta.*escape/]);
+  const reworkTarget=premiseValue(premises,[/meta.*retrabalho.*capacidade/,/meta.*capacidade.*retrabalho/,/meta.*retrabalho/]);
+  const hourlyCost=premiseValue(premises,[/custo.*medio.*por hora/,/custo.*hora/,/valor.*hora/]);
+  const sprintLabels=useMemo(()=>{
+    const all=[...baseRows,...defects,...rework,...calendar].map(r=>str(r["Sprint"]??r["Sprint de detecção"]??r["Sprint do item"])).filter(Boolean);
+    const unique=[...new Set(all)];
+    return unique.sort((a,b)=>sprintNum(a)-sprintNum(b)||a.localeCompare(b,"pt-BR",{numeric:true}));
+  },[baseRows,defects,rework,calendar]);
+  const data=useMemo(()=>sprintLabels.map(sprint=>{
+    const d=defects.filter(r=>str(r["Sprint de detecção"])===sprint);
+    const rw=rework.filter(r=>str(r["Sprint do item"])===sprint);
+    const cal=calendar.find(r=>str(r["Sprint"])===sprint);
+    const throughput=baseRows.filter(r=>str(r["Sprint"])===sprint&&isCompletedRow(r)).length;
+    const originCounts=Object.fromEntries(DEFECT_ORIGINS.map(o=>[o,d.filter(r=>normalize(r["Origem"])===normalize(o)).length])) as Record<string,number>;
+    const defectCount=d.length, school=d.filter(r=>normalize(r["Origem"])===normalize("Escola-piloto")).length;
+    const correction=d.reduce((sum,r)=>sum+(numeric(r["Horas de correção"])??0),0);
+    const restore=d.reduce((sum,r)=>sum+(numeric(r["Horas para restaurar"])??0),0);
+    const reworkHours=rw.reduce((sum,r)=>sum+(numeric(r["Horas de retrabalho"])??0),0);
+    const capacity=numeric(cal?.["Capacidade (h)"]);
+    const totalHours=correction+reworkHours;
+    return {sprint,throughput,defectCount,school,originCounts,defectRate:throughput>0?defectCount/throughput*100:null,escapeRate:defectCount>0?school/defectCount*100:0,correction,reworkHours,restore,totalHours,capacity,reworkCapacity:capacity&&capacity>0?totalHours/capacity*100:null,cost:hourlyCost===null?null:totalHours*hourlyCost};
+  }),[sprintLabels,defects,rework,calendar,baseRows,hourlyCost]);
+  const pareto=useMemo(()=>{
+    const selected=QUALITY_PHASES.find(p=>p.label===phase)||QUALITY_PHASES[0];
+    const filtered=rework.filter(r=>{const n=qualitySprintNum(r,"Sprint do item");return n>=selected.min&&n<=selected.max;});
+    const counts=new Map<string,number>();
+    filtered.forEach(r=>{const cause=str(r["Causa"])||"Causa não informada";counts.set(cause,(counts.get(cause)||0)+1);});
+    const sorted=[...counts].map(([cause,count])=>({cause,count})).sort((a,b)=>b.count-a.count||a.cause.localeCompare(b.cause,"pt-BR"));
+    const total=sorted.reduce((s,r)=>s+r.count,0);let running=0;
+    return sorted.map(r=>{running+=r.count;return {...r,accumulated:total?running/total*100:0};});
+  },[rework,phase]);
+  const totalDefects=data.reduce((sum,r)=>sum+r.defectCount,0);
+  const totalReworkHours=data.reduce((sum,r)=>sum+r.reworkHours,0);
+  const totalCorrectionHours=data.reduce((sum,r)=>sum+r.correction,0);
+  const totalCapacity=data.reduce((sum,r)=>sum+(r.capacity||0),0);
+  const totalCost=hourlyCost===null?null:(totalReworkHours+totalCorrectionHours)*hourlyCost;
+  const missing=!defects.length&&!rework.length&&!calendar.length&&!premises.length;
+  return <div className="ap-quality-page">
+    {source==="demo"&&<section className="ap-panel ap-quality-missing"><strong>Importe a planilha para visualizar os indicadores de qualidade.</strong><p>Esta página utiliza as abas Defeitos, Retrabalho, Calendario_Eventos e Premissas. Nenhum valor demonstrativo foi inventado.</p></section>}
+    {source==="imported"&&missing&&<section className="ap-panel ap-quality-missing"><strong>As abas de qualidade não foram encontradas.</strong><p>Inclua Defeitos, Retrabalho, Calendario_Eventos e Premissas no arquivo .xlsx.</p></section>}
+    <div className="ap-quality-kpis">
+      <div><span>DEFEITOS REGISTRADOS</span><strong>{totalDefects}</strong><small>Origem registrada na aba Defeitos</small></div>
+      <div><span>HORAS DE RETRABALHO</span><strong>{totalReworkHours.toLocaleString("pt-BR",{maximumFractionDigits:1})} h</strong><small>Retrabalho informado na aba Retrabalho</small></div>
+      <div><span>HORAS DE CORREÇÃO</span><strong>{totalCorrectionHours.toLocaleString("pt-BR",{maximumFractionDigits:1})} h</strong><small>Correção informada na aba Defeitos</small></div>
+      <div><span>CUSTO ESTIMADO DO RETRABALHO</span><strong>{totalCost===null?"—":totalCost.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}</strong><small>{hourlyCost===null?"Defina Custo médio por hora em Premissas":("Custo médio por hora: "+hourlyCost.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}))}</small></div>
+    </div>
+    <div className="ap-quality-chart-grid">
+      <section className="ap-panel ap-quality-chart-card">
+        <div className="ap-panel-heading"><div><h2>Defeitos por sprint e taxa de defeitos</h2><p>Barras empilhadas por origem; taxa = defeitos ÷ throughput bruto da sprint.</p></div></div>
+        <QualityLegend items={DEFECT_ORIGINS.map(label=>({label,color:QUALITY_COLORS[label]})).concat([{label:"Taxa de defeitos (%)",color:"#facc15"},{label:"Meta de taxa (%)",color:"#f87171"}])}/>
+        {data.length?<div className="ap-quality-chart-scroll"><div style={{width:Math.max(650,data.length*62),height:310}}><ResponsiveContainer width="100%" height="100%"><ComposedChart data={data} margin={{top:22,right:28,left:0,bottom:14}}>
+          <CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="sprint" tick={{fill:"#91a4c4",fontSize:10}} interval={0} axisLine={{stroke:"#31435f"}} tickLine={false}/><YAxis yAxisId="count" tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} allowDecimals={false}/><YAxis yAxisId="rate" orientation="right" tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} unit="%"/><Tooltip content={<QualityTooltip/>}/>
+          {DEFECT_ORIGINS.map(origin=><Bar key={origin} yAxisId="count" dataKey={"originCounts."+origin} name={origin} stackId="defects" fill={QUALITY_COLORS[origin]} maxBarSize={34}/>)}
+          <Line yAxisId="rate" type="monotone" dataKey="defectRate" name="Taxa de defeitos (%)" stroke="#facc15" strokeWidth={2.5} connectNulls dot={{r:3}}/>
+          {defectTarget!==null&&<ReferenceLine yAxisId="rate" y={defectTarget} stroke="#f87171" strokeDasharray="6 4" label={{value:"Meta: taxa de defeitos",fill:"#f87171",fontSize:9,position:"insideTopRight"}}/>}
+        </ComposedChart></ResponsiveContainer></div></div>:<div className="ap-empty">Não há sprints para calcular os defeitos.</div>}
+        <p className="ap-quality-note">Taxa expressa em percentual. A linha de meta usa Premissas: “Meta: taxa de defeitos”.</p>
+      </section>
+      <section className="ap-panel ap-quality-chart-card">
+        <div className="ap-panel-heading"><div><h2>Taxa de escape por sprint</h2><p>Defeitos identificados na Escola-piloto ÷ total de defeitos da sprint.</p></div></div>
+        <QualityLegend items={[{label:"Taxa de escape (%)",color:"#c084fc"},{label:"Meta de escape (%)",color:"#f87171"}]}/>
+        {data.length?<div className="ap-quality-chart-scroll"><div style={{width:Math.max(650,data.length*62),height:310}}><ResponsiveContainer width="100%" height="100%"><ComposedChart data={data} margin={{top:22,right:22,left:0,bottom:14}}>
+          <CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="sprint" tick={{fill:"#91a4c4",fontSize:10}} interval={0} axisLine={{stroke:"#31435f"}} tickLine={false}/><YAxis tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} unit="%"/><Tooltip content={<QualityTooltip/>}/><Bar dataKey="escapeRate" name="Taxa de escape (%)" fill="#c084fc" radius={[5,5,0,0]} maxBarSize={34}/>
+          {escapeTarget!==null&&<ReferenceLine y={escapeTarget} stroke="#f87171" strokeDasharray="6 4" label={{value:"Meta de escape",fill:"#f87171",fontSize:9,position:"insideTopRight"}}/>}
+        </ComposedChart></ResponsiveContainer></div></div>:<div className="ap-empty">Não há dados de defeitos por sprint.</div>}
+        <p className="ap-quality-note">A taxa é 0% quando a sprint não tem defeitos. Meta lida de Premissas, quando preenchida.</p>
+      </section>
+      <section className="ap-panel ap-quality-chart-card">
+        <div className="ap-panel-heading"><div><h2>Retrabalho em % da capacidade</h2><p>(horas de retrabalho + horas de correção) ÷ capacidade da sprint.</p></div></div>
+        <QualityLegend items={[{label:"Esforço de retrabalho e correção (%)",color:"#34d399"},{label:"Meta de retrabalho (%)",color:"#f87171"}]}/>
+        {data.length?<div className="ap-quality-chart-scroll"><div style={{width:Math.max(650,data.length*62),height:310}}><ResponsiveContainer width="100%" height="100%"><ComposedChart data={data} margin={{top:22,right:22,left:0,bottom:14}}>
+          <CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="sprint" tick={{fill:"#91a4c4",fontSize:10}} interval={0} axisLine={{stroke:"#31435f"}} tickLine={false}/><YAxis tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} unit="%"/><Tooltip content={<QualityTooltip/>}/><Bar dataKey="reworkCapacity" name="Esforço sobre capacidade (%)" fill="#34d399" radius={[5,5,0,0]} maxBarSize={34}/>
+          {reworkTarget!==null&&<ReferenceLine y={reworkTarget} stroke="#f87171" strokeDasharray="6 4" label={{value:"Meta de retrabalho",fill:"#f87171",fontSize:9,position:"insideTopRight"}}/>}
+        </ComposedChart></ResponsiveContainer></div></div>:<div className="ap-empty">Não há sprints para calcular retrabalho.</div>}
+        <p className="ap-quality-note">Sem capacidade válida na aba Calendario_Eventos, a taxa daquela sprint fica indisponível. Meta de retrabalho lida de Premissas, quando disponível.</p>
+      </section>
+      <section className="ap-panel ap-quality-chart-card">
+        <div className="ap-panel-heading"><div><h2>Pareto das causas de retrabalho</h2><p>Ocorrências em ordem decrescente e percentual acumulado.</p></div><label className="ap-quality-select">Fase <select value={phase} onChange={e=>setPhase(e.target.value)}>{QUALITY_PHASES.map(p=><option key={p.label}>{p.label}</option>)}</select></label></div>
+        <QualityLegend items={[{label:"Ocorrências por causa",color:"#60a5fa"},{label:"% acumulado",color:"#facc15"}]}/>
+        {pareto.length?<div className="ap-quality-chart-scroll"><div style={{width:Math.max(650,pareto.length*72),height:320}}><ResponsiveContainer width="100%" height="100%"><ComposedChart data={pareto} margin={{top:20,right:24,left:0,bottom:62}}>
+          <CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="cause" tick={{fill:"#91a4c4",fontSize:9}} interval={0} angle={-30} textAnchor="end" height={76} axisLine={{stroke:"#31435f"}} tickLine={false}/><YAxis yAxisId="count" tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} allowDecimals={false}/><YAxis yAxisId="percent" orientation="right" domain={[0,100]} tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} unit="%"/><Tooltip content={<QualityTooltip/>}/>
+          <Bar yAxisId="count" dataKey="count" name="Ocorrências" fill="#60a5fa" radius={[4,4,0,0]} maxBarSize={42}/><Line yAxisId="percent" type="monotone" dataKey="accumulated" name="% acumulado" stroke="#facc15" strokeWidth={2.5} dot={{r:3}}/>
+        </ComposedChart></ResponsiveContainer></div></div>:<div className="ap-empty">Não há causas de retrabalho para a fase selecionada.</div>}
+        <p className="ap-quality-note">Filtro aplicado à Sprint do item: {phase}. Causas vazias são agrupadas como “Causa não informada”.</p>
+      </section>
+    </div>
+    <section className="ap-panel ap-quality-cost">
+      <div className="ap-panel-heading"><div><h2>Custo do retrabalho por sprint</h2><p>(Horas de retrabalho + horas de correção de defeitos) × custo médio por hora.</p></div><strong className="ap-quality-cost-total">{totalCost===null?"Custo/h não informado":totalCost.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}</strong></div>
+      {data.length?<div className="ap-table-scroll"><table><thead><tr><th>Sprint</th><th>Horas de retrabalho</th><th>Horas de correção</th><th>Capacidade (h)</th><th>Custo estimado</th></tr></thead><tbody>{data.map(r=><tr key={r.sprint}><td>{r.sprint}</td><td>{r.reworkHours.toLocaleString("pt-BR",{maximumFractionDigits:2})} h</td><td>{r.correction.toLocaleString("pt-BR",{maximumFractionDigits:2})} h</td><td>{r.capacity===null?"—":r.capacity.toLocaleString("pt-BR",{maximumFractionDigits:2})+" h"}</td><td>{r.cost===null?"—":r.cost.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}</td></tr>)}</tbody></table></div>:<div className="ap-empty">Importe dados para calcular o custo por sprint.</div>}
+      <p className="ap-quality-note">Capacidade total informada: {totalCapacity.toLocaleString("pt-BR",{maximumFractionDigits:1})} h. Valores são estimativas com base nas horas registradas e em “Custo médio por hora” na aba Premissas.</p>
+    </section>
+  </div>;
+}
+
 function AgilePulse() {
   const [rows,setRows]=useState<Row[]>(demo), [source,setSource]=useState<"demo"|"imported">("demo"), [fileName,setFileName]=useState("");
   const [sheetsData,setSheetsData]=useState<Record<string,Row[]>>({});
@@ -454,17 +575,17 @@ function AgilePulse() {
     setSheetsData(current=>({...current,Base_Itens:(current.Base_Itens||[]).map((row,index)=>index===rowIndex?({...row,[column]:value}):row)}));
   }
   return <main className="ap-shell">
-    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className={"ap-nav "+(activePage==="Dashboard"?"active":"")} onClick={()=>setActivePage("Dashboard")}><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(activePage==="WIP e Aging"?"active":"")} onClick={()=>setActivePage("WIP e Aging")}><Activity size={18}/> WIP e Aging</button><button className={"ap-nav "+(sourceOpen?"active":"") onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button>{source==="imported"&&<><div className="ap-nav-label">ABAS DA PLANILHA</div>{["Base_Itens",...OPTIONAL_SHEET_NAMES].map(name=><button key={name} className={"ap-nav ap-subnav "+(activePage===name?"active":"")} onClick={()=>setActivePage(name)}>{name}{!sheetNames.includes(name)&&<span className="ap-missing-dot">!</span>}</button>)}</>}<div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
+    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className={"ap-nav "+(activePage==="Dashboard"?"active":"")} onClick={()=>setActivePage("Dashboard")}><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(activePage==="WIP e Aging"?"active":"")} onClick={()=>setActivePage("WIP e Aging")}><Activity size={18}/> WIP e Aging</button><button className={"ap-nav "+(activePage==="Qualidade e Retrabalho"?"active":"")} onClick={()=>setActivePage("Qualidade e Retrabalho")}><Activity size={18}/> Qualidade e Retrabalho</button><button className={"ap-nav "+(sourceOpen?"active":"") onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button>{source==="imported"&&<><div className="ap-nav-label">ABAS DA PLANILHA</div>{["Base_Itens",...OPTIONAL_SHEET_NAMES].map(name=><button key={name} className={"ap-nav ap-subnav "+(activePage===name?"active":"")} onClick={()=>setActivePage(name)}>{name}{!sheetNames.includes(name)&&<span className="ap-missing-dot">!</span>}</button>)}</>}<div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
     <section className="ap-main">
-    <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">{activePage==="WIP e Aging"?"FLUXO DE TRABALHO":"MÉTRICAS DE FLUXO"}</div><h1>{activePage==="WIP e Aging"?"WIP e Aging":"Throughput"} <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>{activePage==="WIP e Aging"?"Monitore itens em andamento, envelhecimento e limite de alerta.":"Acompanhe o ritmo de entrega e explore os itens concluídos por sprint."}</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
+    <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">{activePage==="Qualidade e Retrabalho"?"QUALIDADE E CONFIABILIDADE":activePage==="WIP e Aging"?"FLUXO DE TRABALHO":"MÉTRICAS DE FLUXO"}</div><h1>{activePage==="Qualidade e Retrabalho"?"Qualidade e Retrabalho":activePage==="WIP e Aging"?"WIP e Aging":"Throughput"} <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>{activePage==="Qualidade e Retrabalho"?"Acompanhe defeitos, escape, esforço de retrabalho e custo da qualidade.":activePage==="WIP e Aging"?"Monitore itens em andamento, envelhecimento e limite de alerta.":"Acompanhe o ritmo de entrega e explore os itens concluídos por sprint."}</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
     {sourceOpen&&<section className="ap-panel ap-import"><div className="ap-panel-heading"><div><h2>Fontes de Dados</h2><p>Excel .xlsx · leitura das linhas e abas conforme o modelo da planilha.</p></div><button className="ap-icon-button" onClick={()=>{setSourceOpen(false);}}><X size={18}/></button></div>
     <div className="ap-import-choice"><button className="ap-button ap-secondary" onClick={()=>{setRows(demo);setMapping(guessMap(demo));setSource("demo");setFileName("");setSheetsData({});setSheetNames([]);setSnapshotDate("");setActivePage("Dashboard");setUploadError("");setUploadNotice("Dados demonstrativos ativados.");setSourceOpen(false);}}>Usar dados demonstrativos</button><span>ou importe seu arquivo Excel</span></div><div className="ap-dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f)void parseFile(f);}}><FileUp size={26}/><strong>Selecione sua planilha</strong><span>Arraste o arquivo ou escolha no computador</span><small>Excel .xlsx · todas as abas de dados</small><input ref={fileRef} type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0];if(f)void parseFile(f);}}/><button className="ap-button ap-primary" onClick={()=>fileRef.current?.click()}>Escolher arquivo</button></div>
     {uploadError&&<div className="ap-error"><AlertCircle size={16}/>{uploadError}</div>}{uploadNotice&&<div className="ap-note">{uploadNotice}</div>}
     <p className="ap-note">A aba Base_Itens alimenta os gráficos. Abas opcionais habilitam páginas próprias; as abas calculadas são ignoradas. O arquivo e as edições ficam no navegador.</p></section>}
     {source==="imported"&&<div className="ap-imported-counts"><div><span>ITENS IMPORTADOS</span><strong>{importedItems}</strong></div><div><span>SPRINTS IMPORTADAS</span><strong>{importedSprints}</strong></div>{snapshotDate&&<div><span>SNAPSHOT WIP</span><strong>{snapshotDate}</strong></div>}</div>}
     {source==="imported"&&<section className="ap-panel ap-quality-panel"><div className="ap-panel-heading"><div><h2><AlertCircle size={17}/> Alertas de qualidade</h2><p>Validações calculadas a partir das abas de dados.</p></div><span className="ap-quality-count">{qualityAlerts.length} alerta(s)</span></div>{qualityAlerts.length?<ul>{qualityAlerts.map((alert,i)=><li key={i}>{alert}</li>)}</ul>:<p className="ap-note">Nenhum problema identificado nas validações disponíveis.</p>}</section>}
-    {activePage==="WIP e Aging"&&<WipAgingPage rows={sheetsData["WIP_Aberto"]||[]} snapshotDate={snapshotDate} baseRows={rows} source={source}/>}
-    {activePage!=="Dashboard"&&activePage!=="WIP e Aging"&&<section className="ap-panel ap-data-page"><div className="ap-panel-heading"><div><h2>{activePage}</h2><p>{activePage==="WIP_Aberto"&&snapshotDate?"Snapshot em "+snapshotDate:"Dados lidos diretamente da aba "+activePage}</p></div><span>{(sheetsData[activePage]||[]).length} linhas</span></div>{!sheetNames.includes(activePage)?<div className="ap-empty">Esta página depende da aba <strong>{activePage}</strong>. Envie a aba {activePage} no arquivo Excel para habilitá-la.</div>:<div className="ap-table-scroll"><table><thead><tr>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{(sheetsData[activePage]||[]).map((row,i)=><tr key={i}>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><td key={h}>{str(row[h])||"—"}</td>)}</tr>)}</tbody></table></div>}</section>}
+    {activePage==="WIP e Aging"&&<WipAgingPage rows={sheetsData["WIP_Aberto"]||[]} snapshotDate={snapshotDate} baseRows={rows} source={source}/>}\n     {activePage==="Qualidade e Retrabalho"&&<QualityReworkPage defects={sheetsData["Defeitos"]||[]} rework={sheetsData["Retrabalho"]||[]} calendar={sheetsData["Calendario_Eventos"]||[]} premises={sheetsData["Premissas"]||[]} baseRows={rows} source={source}/>}
+    {activePage!=="Dashboard"&&activePage!=="WIP e Aging"&&activePage!=="Qualidade e Retrabalho"&&<section className="ap-panel ap-data-page"><div className="ap-panel-heading"><div><h2>{activePage}</h2><p>{activePage==="WIP_Aberto"&&snapshotDate?"Snapshot em "+snapshotDate:"Dados lidos diretamente da aba "+activePage}</p></div><span>{(sheetsData[activePage]||[]).length} linhas</span></div>{!sheetNames.includes(activePage)?<div className="ap-empty">Esta página depende da aba <strong>{activePage}</strong>. Envie a aba {activePage} no arquivo Excel para habilitá-la.</div>:<div className="ap-table-scroll"><table><thead><tr>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{(sheetsData[activePage]||[]).map((row,i)=><tr key={i}>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><td key={h}>{str(row[h])||"—"}</td>)}</tr>)}</tbody></table></div>}</section>}
     {activePage==="Dashboard"&&source==="imported"&&missingOptional.length>0&&<section className="ap-panel ap-missing-sheets"><strong>Abas opcionais não encontradas</strong><p>Envie as seguintes abas para habilitar suas páginas: {missingOptional.join(", ")}.</p></section>}
     <div className="ap-source-strip"><div className="ap-source-icon"><Database size={18}/></div><div><strong>{source==="demo"?"Dados demonstrativos (fictícios)":fileName}</strong><span>{source==="demo"?"Exemplo ilustrativo · não representa dados reais":"Dados ativos nesta sessão do navegador"}</span></div><div className="ap-source-state"><Check size={13}/>{source==="demo"?"Exemplo ativo":"Importação confirmada"} <button onClick={()=>setSourceOpen(true)}>Gerenciar</button></div><button className="ap-button ap-secondary ap-edit-toggle" onClick={()=>setEditorOpen(v=>!v)}><FileSpreadsheet size={15}/>{editorOpen?"Ocultar dados":"Visualizar e editar dados"}</button></div>
     {editorOpen&&<section className="ap-panel ap-data-editor"><div className="ap-panel-heading"><div><div><h2>Dados carregados</h2><p>Edite qualquer célula. Os gráficos e indicadores são recalculados automaticamente.</p></div></div><button className="ap-icon-button" onClick={()=>setEditorOpen(false)} aria-label="Fechar editor"><X size={18}/></button></div><div className="ap-editor-meta">{rows.length} linhas · {Object.keys(rows[0]||{}).length} colunas · alterações aplicadas em tempo real</div><div className="ap-table-scroll ap-edit-table"><table><thead><tr>{Object.keys(rows[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((row,rowIndex)=><tr key={rowIndex}>{Object.keys(rows[0]||{}).map(column=><td key={column}><input aria-label={`Linha ${rowIndex+1}, ${column}`} title={`${column} · linha ${rowIndex+1}`} value={str(row[column])} onChange={e=>updateCell(rowIndex,column,e.target.value)}/></td>)}</tr>)}</tbody></table></div><p className="ap-note"><AlertCircle size={14}/>As edições ficam nesta sessão do navegador. Para manter alterações fora desta sessão, exporte ou salve os dados em um arquivo.</p></section>}
