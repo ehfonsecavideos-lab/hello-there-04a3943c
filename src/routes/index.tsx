@@ -760,15 +760,16 @@ function ExecutiveSummaryPage({baseRows,defects,rework,calendar,doraSprints,prem
   const hours=rw.reduce((a,r)=>a+(numeric(r["Horas de retrabalho"])??0),0)+ds.reduce((a,r)=>a+(numeric(r["Horas de correção"])??0),0);
   const deploy=numeric(doraSprints.find(r=>str(r["Sprint"])===sprint)?.["Deploys na sprint"]), failed=ds.filter(r=>/^(sim|yes|true|1)$/i.test(str(r["Causou falha de deploy?"])));
   const recovery=failed.map(r=>numeric(r["Horas para restaurar"])).filter((v):v is number=>v!==null&&v>=0);
-  return {sprint,n:sprintNum(sprint),gross,net,lead:avgNumbers(lead),p85:inclusiveP85(lead),defect: gross?ds.length/gross*100:null,escape:ds.length?school/ds.length*100:null,rework:cap!==null&&cap>0?hours/cap*100:null,cfr:deploy!==null&&deploy>0?failed.length/deploy*100:null,recovery:avgNumbers(recovery),defects:ds.length,school,deploy,failures:failed.length};
+  return {sprint,n:sprintNum(sprint),gross,net,lead:avgNumbers(lead),p85:inclusiveP85(lead),defect: gross?ds.length/gross*100:null,escape:ds.length?school/ds.length*100:null,rework:cap!==null&&cap>0?hours/cap*100:null,cfr:deploy!==null&&deploy>0?failed.length/deploy*100:null,recovery:avgNumbers(recovery),leadValues:lead,recoveryValues:recovery,defects:ds.length,school,deploy,failures:failed.length};
  });
  const metrics=[{key:"gross",label:"Throughput bruto",unit:"itens"},{key:"net",label:"Throughput líquido",unit:"itens"},{key:"lead",label:"Lead Time médio",unit:"dias"},{key:"p85",label:"Lead Time P85",unit:"dias"},{key:"defect",label:"Taxa de defeitos",unit:"%"},{key:"escape",label:"Taxa de escape",unit:"%"},{key:"rework",label:"Retrabalho / capacidade",unit:"%"},{key:"cfr",label:"Change failure rate",unit:"%"},{key:"recovery",label:"Tempo de recuperação",unit:"h"}];
  const phases=SUMMARY_PHASES.map(ph=>{
   const ss=data.filter(s=>s.n>=ph.min&&s.n<=ph.max), total=(k:"gross"|"net")=>ss.reduce((a,s)=>a+s[k],0);
   const mean=(k:string)=>avgNumbers(ss.map(s=>(s as any)[k] as number|null).filter((v):v is number=>v!==null&&Number.isFinite(v)));
   const totalGross=total("gross"),defectsTotal=ss.reduce((a,s)=>a+s.defects,0),school=ss.reduce((a,s)=>a+s.school,0),deploys=ss.reduce((a,s)=>a+(s.deploy||0),0),failures=ss.reduce((a,s)=>a+s.failures,0);
-  const recoveryValues=ss.flatMap(s=>s.recovery===null?[]:Array.from({length:Math.max(1,s.failures)},()=>s.recovery as number));
-  return {label:ph.label,gross:total("gross"),net:total("net"),lead:mean("lead"),p85:mean("p85"),defect:totalGross?defectsTotal/totalGross*100:null,escape:defectsTotal?school/defectsTotal*100:null,rework:mean("rework"),cfr:deploys?failures/deploys*100:null,recovery:avgNumbers(recoveryValues)};
+  const recoveryValues=ss.flatMap(s=>s.recoveryValues as number[]);
+  const phaseLeadValues=ss.flatMap(s=>s.leadValues as number[]);
+  return {label:ph.label,gross:total("gross"),net:total("net"),lead:avgNumbers(phaseLeadValues),p85:inclusiveP85(phaseLeadValues),defect:totalGross?defectsTotal/totalGross*100:null,escape:defectsTotal?school/defectsTotal*100:null,rework:mean("rework"),cfr:deploys?failures/deploys*100:null,recovery:avgNumbers(recoveryValues)};
  });
  const prev=phases[2],last=phases[3],meanRange=(min:number,max:number,key:"net"|"gross")=>{const ss=data.filter(s=>s.n>=min&&s.n<=max);return ss.length?avgNumbers(ss.map(s=>s[key])):null;};
  const probable=meanRange(18,20,"net"),optimistic=meanRange(4,10,"net"),pessimistic=meanRange(15,17,"net"),grossProbable=meanRange(18,20,"gross"),remaining=backlog.length;
