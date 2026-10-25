@@ -471,6 +471,116 @@ function QualityReworkPage({defects,rework,calendar,premises,baseRows,source}:{d
   </div>;
 }
 
+
+const BOTTLENECK_STAGES=[
+  {key:"dev",label:"In development",field:"In development",kind:"work",color:"#3b82f6"},
+  {key:"waitQa",label:"Waiting for QA",field:"Waiting for QA",kind:"wait",color:"#94a3b8"},
+  {key:"qa",label:"In QA review",field:"In QA review",kind:"work",color:"#60a5fa"},
+  {key:"code",label:"In code review",field:"In code review",kind:"work",color:"#2563eb"},
+  {key:"waitReview",label:"Waiting for review",field:"Waiting for review",kind:"wait",color:"#64748b"}
+];
+function bottleneckPremisePercent(rows:Row[]):number|null {
+  const row=rows.find(r=>/meta.*(change failure|falha|failure)/.test(normalize(r["Parâmetro"]??r["Parametro"]??"")));
+  if(!row)return null;
+  const raw=str(row["Valor"]??row["valor"]);
+  const value=numeric(raw);
+  if(value===null)return null;
+  return raw.includes("%")?value:(value>0&&value<=1?value*100:value);
+}
+function BottleneckDoraTooltip({active,payload,label}:{active?:boolean;payload?:any[];label?:string}) {
+  if(!active||!payload?.length)return null;
+  return <div style={{background:"#101d33",border:"1px solid #304565",borderRadius:10,padding:"10px 12px",color:"#f1f5ff",fontSize:11}}>
+    <strong>{label}</strong>{payload.filter(p=>p.value!==null&&p.value!==undefined).map((p,i)=><div key={String(p.dataKey)+i} style={{marginTop:5,color:p.color||"#dce7f8"}}>{p.name||p.dataKey}: {typeof p.value==="number"?p.value.toLocaleString("pt-BR",{maximumFractionDigits:2}):String(p.value)}{String(p.dataKey).toLowerCase().includes("rate")||String(p.dataKey).toLowerCase().includes("percent")||String(p.dataKey).toLowerCase().includes("failure")?"%":""}</div>)}
+  </div>;
+}
+function BottleneckDoraPage({baseRows,defects,doraSprints,premises,source}:{baseRows:Row[];defects:Row[];doraSprints:Row[];premises:Row[];source:"demo"|"imported"}) {
+  const [period,setPeriod]=useState("Todas");
+  const failureTarget=bottleneckPremisePercent(premises);
+  const sprintLabels=useMemo(()=>{
+    const all=[...baseRows,...defects,...doraSprints].map(r=>str(r["Sprint"]??r["Sprint de detecção"])).filter(Boolean);
+    return [...new Set(all)].sort((a,b)=>sprintNum(a)-sprintNum(b)||a.localeCompare(b,"pt-BR",{numeric:true}));
+  },[baseRows,defects,doraSprints]);
+  const data=useMemo(()=>sprintLabels.map(sprint=>{
+    const items=baseRows.filter(r=>str(r["Sprint"])===sprint);
+    const stageMeans:Record<string,number|null>={};
+    BOTTLENECK_STAGES.forEach(stage=>{
+      const values=items.map(r=>numeric(r[stage.field])).filter((v):v is number=>v!==null&&v>=0);
+      stageMeans[stage.key]=values.length?values.reduce((a,b)=>a+b,0)/values.length:null;
+    });
+    const queueValues=items.map(r=>{
+      const lead=numeric(r["Lead time (dias corridos)"]),cycle=numeric(r["Cycle time (dias corridos)"]);
+      return lead!==null&&cycle!==null?Math.max(0,lead-cycle):null;
+    }).filter((v):v is number=>v!==null);
+    const queue=queueValues.length?queueValues.reduce((a,b)=>a+b,0)/queueValues.length:null;
+    const cycleValues=items.map(r=>numeric(r["Cycle time (dias corridos)"])).filter((v):v is number=>v!==null&&v>=0);
+    const leadValues=items.map(r=>numeric(r["Lead time (dias corridos)"])).filter((v):v is number=>v!==null&&v>=0);
+    const cycleMean=cycleValues.length?cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length:null;
+    const leadMean=leadValues.length?leadValues.reduce((a,b)=>a+b,0)/leadValues.length:null;
+    const slowest=BOTTLENECK_STAGES.map(s=>({label:s.label,value:stageMeans[s.key]})).filter(s=>s.value!==null).sort((a,b)=>(b.value||0)-(a.value||0))[0]?.label||"Sem dados";
+    const waitValues=items.map(r=>{
+      const lead=numeric(r["Lead time (dias corridos)"]);
+      const wqa=numeric(r["Waiting for QA"]),wreview=numeric(r["Waiting for review"]),cyc=numeric(r["Cycle time (dias corridos)"]);
+      if(lead===null||cyc===null)return null;
+      const q=Math.max(0,lead-cyc);
+      return {lead,wait:(wqa===null?0:wqa)+(wreview===null?0:wreview)+q};
+    }).filter((v):v is {lead:number;wait:number}=>v!==null&&v.lead>0);
+    const waitPct=waitValues.length?waitValues.reduce((a,b)=>a+b.wait,0)/waitValues.reduce((a,b)=>a+b.lead,0)*100:null;
+    const doraRow=doraSprints.find(r=>str(r["Sprint"])===sprint);
+    const deploys=numeric(doraRow?.["Deploys na sprint"]);
+    const failed=defects.filter(r=>str(r["Sprint de detecção"])===sprint&&/^(sim|yes|true|1)$/i.test(str(r["Causou falha de deploy?"])));
+    const allFailures=defects.filter(r=>str(r["Sprint de detecção"])===sprint&&str(r["Causou falha de deploy?"])!=="");
+    const restoration=failed.map(r=>numeric(r["Horas para restaurar"])).filter((v):v is number=>v!==null&&v>=0);
+    const recovery=failed.length&&restoration.length?restoration.reduce((a,b)=>a+b,0)/restoration.length:null;
+    const cfr=deploys!==null&&deploys>0?failed.length/deploys*100:null;
+    return {sprint,...stageMeans,queue,cycleMean,leadMean,slowest,waitPct,deploys,deploysPerWeek:deploys===null?null:deploys/2,failedCount:failed.length,reportedFailures:allFailures.length,cfr,recovery};
+  }),[sprintLabels,baseRows,defects,doraSprints]);
+  const shown=period==="Todas"?data:data.filter(d=>d.sprint===period);
+  const waitNumerator=shown.reduce((sum,d)=>{
+    const items=baseRows.filter(r=>str(r["Sprint"])===d.sprint);
+    return sum+items.reduce((s,r)=>{
+      const lead=numeric(r["Lead time (dias corridos)"]),cycle=numeric(r["Cycle time (dias corridos)"]);
+      if(lead===null||cycle===null)return s;
+      return s+(numeric(r["Waiting for QA"])||0)+(numeric(r["Waiting for review"])||0)+Math.max(0,lead-cycle);
+    },0);
+  },0);
+  const waitDenominator=shown.reduce((sum,d)=>sum+baseRows.filter(r=>str(r["Sprint"])===d.sprint).reduce((s,r)=>s+(numeric(r["Lead time (dias corridos)"])||0),0),0);
+  const totalWaitPct=waitDenominator>0?waitNumerator/waitDenominator*100:null;
+  const hasData=baseRows.length>0||defects.length>0||doraSprints.length>0;
+  const doraChart=(title:string,description:string,key:string,color:string,unit:string,meta?:number|null)=> <section className="ap-panel ap-bd-chart-card">
+    <div className="ap-panel-heading"><div><h2>{title}</h2><p>{description}</p></div></div>
+    <div className="ap-quality-legend"><span><i style={{background:color}}/>{title}</span>{meta!==undefined&&meta!==null&&<span><i style={{background:"#f87171"}}/>Meta de falha: {meta.toLocaleString("pt-BR",{maximumFractionDigits:2})}%</span>}</div>
+    {shown.length?<div className="ap-quality-chart-scroll"><div style={{width:Math.max(520,shown.length*62),height:260}}><ResponsiveContainer width="100%" height="100%"><ComposedChart data={shown} margin={{top:18,right:25,left:0,bottom:12}}>
+      <CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="sprint" tick={{fill:"#91a4c4",fontSize:10}} interval={0} axisLine={{stroke:"#31435f"}} tickLine={false}/><YAxis tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} unit={unit}/><Tooltip content={<BottleneckDoraTooltip/>}/>
+      {meta!==undefined&&meta!==null&&<ReferenceLine y={meta} stroke="#f87171" strokeDasharray="6 4" label={{value:"Meta",fill:"#f87171",fontSize:9,position:"insideTopRight"}}/>}
+      {key==="recovery"?<Line type="monotone" dataKey={key} name={title} stroke={color} strokeWidth={2.5} connectNulls={false} dot={{r:4}} activeDot={{r:5}}/>:<Bar dataKey={key} name={title} fill={color} radius={[5,5,0,0]} maxBarSize={34}/>}
+    </ComposedChart></ResponsiveContainer></div></div>:<div className="ap-empty">Não há dados no período selecionado.</div>}
+  </section>;
+  return <div className="ap-bd-page">
+    <div className="ap-bd-controls"><div><strong>Período analisado</strong><span>O filtro atualiza os gráficos e o cartão de espera.</span></div><select aria-label="Selecionar período" value={period} onChange={e=>setPeriod(e.target.value)}><option>Todas</option>{sprintLabels.map(s=><option key={s}>{s}</option>)}</select></div>
+    {!hasData&&<section className="ap-panel ap-quality-missing"><strong>Importe a planilha para visualizar Gargalo e DORA.</strong><p>Esta página utiliza Base_Itens, DORA_Sprint, Defeitos e Premissas.</p></section>}
+    {source==="demo"&&<p className="ap-quality-note">Os dados demonstrativos atuais não incluem as abas necessárias para calcular os indicadores DORA e o detalhamento de gargalos. Importe a planilha para preencher os gráficos.</p>}
+    <section className="ap-panel ap-bd-bottleneck">
+      <div className="ap-panel-heading"><div><h2>Composição do Cycle Time por sprint</h2><p>Média das cinco etapas de Base_Itens e fila inicial (Lead Time − Cycle Time), em dias corridos.</p></div><div className="ap-bd-wait-card"><span>ESPERA TOTAL / LEAD TIME</span><strong>{totalWaitPct===null?"—":totalWaitPct.toLocaleString("pt-BR",{maximumFractionDigits:1})+"%"}</strong><small>{period==="Todas"?"Período completo":period}</small></div></div>
+      <div className="ap-quality-legend ap-bd-stage-legend">{BOTTLENECK_STAGES.map(s=><span key={s.key}><i style={{background:s.color}}/>{s.label}</span>)}<span><i style={{background:"#475569"}}/>Fila antes de iniciar</span></div>
+      {shown.length?<div className="ap-quality-chart-scroll"><div style={{width:Math.max(650,shown.length*68),height:330}}><ResponsiveContainer width="100%" height="100%"><BarChart data={shown} margin={{top:18,right:22,left:0,bottom:14}}>
+        <CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="sprint" tick={{fill:"#91a4c4",fontSize:10}} interval={0} axisLine={{stroke:"#31435f"}} tickLine={false}/><YAxis tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} unit=" d"/><Tooltip content={<BottleneckDoraTooltip/>}/>
+        {BOTTLENECK_STAGES.map(s=><Bar key={s.key} dataKey={s.key} name={s.label+" (média, dias)"} stackId="time" fill={s.color} maxBarSize={38}/>)}
+        <Bar dataKey="queue" name="Fila antes de iniciar (média, dias)" stackId="time" fill="#475569" maxBarSize={38}/>
+      </BarChart></ResponsiveContainer></div></div>:<div className="ap-empty">Não há sprints para o período selecionado.</div>}
+      <div className="ap-table-scroll ap-bd-table"><table><thead><tr><th>Sprint</th><th>Etapa mais lenta no cycle time</th><th>Espera / Lead Time</th><th>Fila antes de iniciar (dias)</th></tr></thead><tbody>{shown.map(d=><tr key={d.sprint}><td>{d.sprint}</td><td>{d.slowest}</td><td>{d.waitPct===null?"—":d.waitPct.toLocaleString("pt-BR",{maximumFractionDigits:1})+"%"}</td><td>{d.queue===null?"—":d.queue.toLocaleString("pt-BR",{maximumFractionDigits:2})}</td></tr>)}</tbody></table></div>
+      <p className="ap-quality-note">A etapa mais lenta é a etapa de trabalho/espera com maior média entre as cinco etapas do Cycle Time; a fila inicial é mostrada separadamente. Percentual agregado de espera pondera as horas/dias de espera pela soma do Lead Time dos itens com dados válidos.</p>
+    </section>
+    <div className="ap-bd-dora-heading"><div><h2>Indicadores DORA por sprint</h2><p>Deploys, falhas de mudança, recuperação e lead time for changes.</p></div></div>
+    <div className="ap-bd-dora-grid">
+      {doraChart("Deploys por semana","Deploys na sprint ÷ 2.","deploysPerWeek","#60a5fa","")}
+      {doraChart("Change failure rate","Falhas de deploy confirmadas ÷ deploys da sprint.","cfr","#f59e0b","%",failureTarget)}
+      {doraChart("Tempo médio de recuperação","Média de Horas para restaurar dos defeitos que causaram falha; sem ponto quando não há falha.","recovery","#c084fc"," h")}
+      {doraChart("Lead time for changes","Cycle Time médio dos itens na sprint, em dias corridos.","cycleMean","#34d399"," d")}
+    </div>
+    <p className="ap-quality-note">Change failure rate só é calculado quando há deploys maiores que zero. Falhas são identificadas por “Causou falha de deploy?” = Sim. O tempo de recuperação fica sem ponto quando a sprint não tem falhas registradas. Meta lida de Premissas (parâmetro relacionado a “meta de falha” ou “change failure”).</p>
+  </div>;
+}
+
 function AgilePulse() {
   const [rows,setRows]=useState<Row[]>(demo), [source,setSource]=useState<"demo"|"imported">("demo"), [fileName,setFileName]=useState("");
   const [sheetsData,setSheetsData]=useState<Record<string,Row[]>>({});
@@ -575,9 +685,9 @@ function AgilePulse() {
     setSheetsData(current=>({...current,Base_Itens:(current.Base_Itens||[]).map((row,index)=>index===rowIndex?({...row,[column]:value}):row)}));
   }
   return <main className="ap-shell">
-    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className={"ap-nav "+(activePage==="Dashboard"?"active":"")} onClick={()=>setActivePage("Dashboard")}><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(activePage==="WIP e Aging"?"active":"")} onClick={()=>setActivePage("WIP e Aging")}><Activity size={18}/> WIP e Aging</button><button className={"ap-nav "+(activePage==="Qualidade e Retrabalho"?"active":"")} onClick={()=>setActivePage("Qualidade e Retrabalho")}><Activity size={18}/> Qualidade e Retrabalho</button><button className={"ap-nav "+(sourceOpen?"active":"") onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button>{source==="imported"&&<><div className="ap-nav-label">ABAS DA PLANILHA</div>{["Base_Itens",...OPTIONAL_SHEET_NAMES].map(name=><button key={name} className={"ap-nav ap-subnav "+(activePage===name?"active":"")} onClick={()=>setActivePage(name)}>{name}{!sheetNames.includes(name)&&<span className="ap-missing-dot">!</span>}</button>)}</>}<div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
+    <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className={"ap-nav "+(activePage==="Dashboard"?"active":"")} onClick={()=>setActivePage("Dashboard")}><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(activePage==="WIP e Aging"?"active":"")} onClick={()=>setActivePage("WIP e Aging")}><Activity size={18}/> WIP e Aging</button><button className={"ap-nav "+(activePage==="Qualidade e Retrabalho"?"active":"")} onClick={()=>setActivePage("Qualidade e Retrabalho")}><Activity size={18}/> Qualidade e Retrabalho</button><button className={"ap-nav "+(activePage==="Gargalo e DORA"?"active":"")} onClick={()=>setActivePage("Gargalo e DORA")}><Activity size={18}/> Gargalo e DORA</button><button className={"ap-nav "+(sourceOpen?"active":"") onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button>{source==="imported"&&<><div className="ap-nav-label">ABAS DA PLANILHA</div>{["Base_Itens",...OPTIONAL_SHEET_NAMES].map(name=><button key={name} className={"ap-nav ap-subnav "+(activePage===name?"active":"")} onClick={()=>setActivePage(name)}>{name}{!sheetNames.includes(name)&&<span className="ap-missing-dot">!</span>}</button>)}</>}<div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
     <section className="ap-main">
-    <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">{activePage==="Qualidade e Retrabalho"?"QUALIDADE E CONFIABILIDADE":activePage==="WIP e Aging"?"FLUXO DE TRABALHO":"MÉTRICAS DE FLUXO"}</div><h1>{activePage==="Qualidade e Retrabalho"?"Qualidade e Retrabalho":activePage==="WIP e Aging"?"WIP e Aging":"Throughput"} <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>{activePage==="Qualidade e Retrabalho"?"Acompanhe defeitos, escape, esforço de retrabalho e custo da qualidade.":activePage==="WIP e Aging"?"Monitore itens em andamento, envelhecimento e limite de alerta.":"Acompanhe o ritmo de entrega e explore os itens concluídos por sprint."}</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
+    <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">{activePage==="Gargalo e DORA"?"FLUXO E CONFIABILIDADE":activePage==="Qualidade e Retrabalho"?"QUALIDADE E CONFIABILIDADE":activePage==="WIP e Aging"?"FLUXO DE TRABALHO":"MÉTRICAS DE FLUXO"}</div><h1>{activePage==="Gargalo e DORA"?"Gargalo e DORA":activePage==="Qualidade e Retrabalho"?"Qualidade e Retrabalho":activePage==="WIP e Aging"?"WIP e Aging":"Throughput"} <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>{activePage==="Gargalo e DORA"?"Identifique filas, etapas lentas e estabilidade das entregas.":activePage==="Qualidade e Retrabalho"?"Acompanhe defeitos, escape, esforço de retrabalho e custo da qualidade.":activePage==="WIP e Aging"?"Monitore itens em andamento, envelhecimento e limite de alerta.":"Acompanhe o ritmo de entrega e explore os itens concluídos por sprint."}</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
     {sourceOpen&&<section className="ap-panel ap-import"><div className="ap-panel-heading"><div><h2>Fontes de Dados</h2><p>Excel .xlsx · leitura das linhas e abas conforme o modelo da planilha.</p></div><button className="ap-icon-button" onClick={()=>{setSourceOpen(false);}}><X size={18}/></button></div>
     <div className="ap-import-choice"><button className="ap-button ap-secondary" onClick={()=>{setRows(demo);setMapping(guessMap(demo));setSource("demo");setFileName("");setSheetsData({});setSheetNames([]);setSnapshotDate("");setActivePage("Dashboard");setUploadError("");setUploadNotice("Dados demonstrativos ativados.");setSourceOpen(false);}}>Usar dados demonstrativos</button><span>ou importe seu arquivo Excel</span></div><div className="ap-dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f)void parseFile(f);}}><FileUp size={26}/><strong>Selecione sua planilha</strong><span>Arraste o arquivo ou escolha no computador</span><small>Excel .xlsx · todas as abas de dados</small><input ref={fileRef} type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0];if(f)void parseFile(f);}}/><button className="ap-button ap-primary" onClick={()=>fileRef.current?.click()}>Escolher arquivo</button></div>
     {uploadError&&<div className="ap-error"><AlertCircle size={16}/>{uploadError}</div>}{uploadNotice&&<div className="ap-note">{uploadNotice}</div>}
@@ -585,8 +695,8 @@ function AgilePulse() {
     {source==="imported"&&<div className="ap-imported-counts"><div><span>ITENS IMPORTADOS</span><strong>{importedItems}</strong></div><div><span>SPRINTS IMPORTADAS</span><strong>{importedSprints}</strong></div>{snapshotDate&&<div><span>SNAPSHOT WIP</span><strong>{snapshotDate}</strong></div>}</div>}
     {source==="imported"&&<section className="ap-panel ap-quality-panel"><div className="ap-panel-heading"><div><h2><AlertCircle size={17}/> Alertas de qualidade</h2><p>Validações calculadas a partir das abas de dados.</p></div><span className="ap-quality-count">{qualityAlerts.length} alerta(s)</span></div>{qualityAlerts.length?<ul>{qualityAlerts.map((alert,i)=><li key={i}>{alert}</li>)}</ul>:<p className="ap-note">Nenhum problema identificado nas validações disponíveis.</p>}</section>}
     {activePage==="WIP e Aging"&&<WipAgingPage rows={sheetsData["WIP_Aberto"]||[]} snapshotDate={snapshotDate} baseRows={rows} source={source}/>} 
-     {activePage==="Qualidade e Retrabalho"&&<QualityReworkPage defects={sheetsData["Defeitos"]||[]} rework={sheetsData["Retrabalho"]||[]} calendar={sheetsData["Calendario_Eventos"]||[]} premises={sheetsData["Premissas"]||[]} baseRows={rows} source={source}/>}
-    {activePage!=="Dashboard"&&activePage!=="WIP e Aging"&&activePage!=="Qualidade e Retrabalho"&&<section className="ap-panel ap-data-page"><div className="ap-panel-heading"><div><h2>{activePage}</h2><p>{activePage==="WIP_Aberto"&&snapshotDate?"Snapshot em "+snapshotDate:"Dados lidos diretamente da aba "+activePage}</p></div><span>{(sheetsData[activePage]||[]).length} linhas</span></div>{!sheetNames.includes(activePage)?<div className="ap-empty">Esta página depende da aba <strong>{activePage}</strong>. Envie a aba {activePage} no arquivo Excel para habilitá-la.</div>:<div className="ap-table-scroll"><table><thead><tr>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{(sheetsData[activePage]||[]).map((row,i)=><tr key={i}>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><td key={h}>{str(row[h])||"—"}</td>)}</tr>)}</tbody></table></div>}</section>}
+     {activePage==="Gargalo e DORA"&&<BottleneckDoraPage baseRows={rows} defects={sheetsData["Defeitos"]||[]} doraSprints={sheetsData["DORA_Sprint"]||[]} premises={sheetsData["Premissas"]||[]} source={source}/>}\n     {activePage==="Qualidade e Retrabalho"&&<QualityReworkPage defects={sheetsData["Defeitos"]||[]} rework={sheetsData["Retrabalho"]||[]} calendar={sheetsData["Calendario_Eventos"]||[]} premises={sheetsData["Premissas"]||[]} baseRows={rows} source={source}/>}
+    {activePage!=="Dashboard"&&activePage!=="WIP e Aging"&&activePage!=="Qualidade e Retrabalho"&&activePage!=="Gargalo e DORA"&&<section className="ap-panel ap-data-page"><div className="ap-panel-heading"><div><h2>{activePage}</h2><p>{activePage==="WIP_Aberto"&&snapshotDate?"Snapshot em "+snapshotDate:"Dados lidos diretamente da aba "+activePage}</p></div><span>{(sheetsData[activePage]||[]).length} linhas</span></div>{!sheetNames.includes(activePage)?<div className="ap-empty">Esta página depende da aba <strong>{activePage}</strong>. Envie a aba {activePage} no arquivo Excel para habilitá-la.</div>:<div className="ap-table-scroll"><table><thead><tr>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{(sheetsData[activePage]||[]).map((row,i)=><tr key={i}>{Object.keys((sheetsData[activePage]||[])[0]||{}).map(h=><td key={h}>{str(row[h])||"—"}</td>)}</tr>)}</tbody></table></div>}</section>}
     {activePage==="Dashboard"&&source==="imported"&&missingOptional.length>0&&<section className="ap-panel ap-missing-sheets"><strong>Abas opcionais não encontradas</strong><p>Envie as seguintes abas para habilitar suas páginas: {missingOptional.join(", ")}.</p></section>}
     <div className="ap-source-strip"><div className="ap-source-icon"><Database size={18}/></div><div><strong>{source==="demo"?"Dados demonstrativos (fictícios)":fileName}</strong><span>{source==="demo"?"Exemplo ilustrativo · não representa dados reais":"Dados ativos nesta sessão do navegador"}</span></div><div className="ap-source-state"><Check size={13}/>{source==="demo"?"Exemplo ativo":"Importação confirmada"} <button onClick={()=>setSourceOpen(true)}>Gerenciar</button></div><button className="ap-button ap-secondary ap-edit-toggle" onClick={()=>setEditorOpen(v=>!v)}><FileSpreadsheet size={15}/>{editorOpen?"Ocultar dados":"Visualizar e editar dados"}</button></div>
     {editorOpen&&<section className="ap-panel ap-data-editor"><div className="ap-panel-heading"><div><div><h2>Dados carregados</h2><p>Edite qualquer célula. Os gráficos e indicadores são recalculados automaticamente.</p></div></div><button className="ap-icon-button" onClick={()=>setEditorOpen(false)} aria-label="Fechar editor"><X size={18}/></button></div><div className="ap-editor-meta">{rows.length} linhas · {Object.keys(rows[0]||{}).length} colunas · alterações aplicadas em tempo real</div><div className="ap-table-scroll ap-edit-table"><table><thead><tr>{Object.keys(rows[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((row,rowIndex)=><tr key={rowIndex}>{Object.keys(rows[0]||{}).map(column=><td key={column}><input aria-label={`Linha ${rowIndex+1}, ${column}`} title={`${column} · linha ${rowIndex+1}`} value={str(row[column])} onChange={e=>updateCell(rowIndex,column,e.target.value)}/></td>)}</tr>)}</tbody></table></div><p className="ap-note"><AlertCircle size={14}/>As edições ficam nesta sessão do navegador. Para manter alterações fora desta sessão, exporte ou salve os dados em um arquivo.</p></section>}
