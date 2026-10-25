@@ -35,7 +35,7 @@ const normalize = (v: unknown) => String(v ?? "").trim().toLowerCase().normalize
 const str = (v: unknown) => String(v ?? "").trim();
 const completedDefaults = ["done", "concluído", "concluido", "resolvido", "resolvida", "closed", "complete", "completed", "feito", "finalizado", "testado", "aprovado para produção"];
 function guessMap(rows: Row[]): MapCols {
-  const h = Object.keys(rows[0] || {});
+  const h = [...new Set(rows.flatMap(row => Object.keys(row)))];
   const find = (rx: RegExp[]) => h.find(k => rx.some(p => p.test(normalize(k)))) || "";
   return {
     sprint: find([/^sprint$/, /sprint.*(name|nome|number|numero)/, /iteracao/]),
@@ -172,14 +172,14 @@ function AgilePulse() {
   const [pending,setPending]=useState<Row[]|null>(null), [sheetNames,setSheetNames]=useState<string[]>([]), [sheet,setSheet]=useState("");
   const [mapping,setMapping]=useState<MapCols>(guessMap(demo)), [statusText,setStatusText]=useState("Done, Concluído, Resolvido, Closed, Complete, Feito, Testado, Aprovado para Produção");
   const [sourceOpen,setSourceOpen]=useState(false), [editorOpen,setEditorOpen]=useState(false);
-  const [uploadError,setUploadError]=useState("");
+  const [uploadError,setUploadError]=useState(""), [uploadNotice,setUploadNotice]=useState("");
   const [filter,setFilter]=useState("Todas as sprints"); const fileRef=useRef<HTMLInputElement>(null);
   const headers=Object.keys((pending||rows)[0]||{}), statuses=statusText.split(",").map(s=>s.trim()).filter(Boolean);
   const stats=useMemo(()=>calculate(rows,mapping,statuses),[rows,mapping,statusText]);
   const chartRows=filter==="Todas as sprints"?stats.counts:stats.counts.filter(s=>s.sprint===filter);
   const quality=stats.noSprint+stats.noStatus+stats.noItem+stats.duplicates;
   async function parseFile(file: File) {
-    setUploadError("");
+    setUploadError("");setUploadNotice("");
     setPending(null);
     try {
       const wb=XLSX.read(await file.arrayBuffer(),{type:"array",cellDates:true});
@@ -211,7 +211,7 @@ function AgilePulse() {
         })});
         const result=await response.json();
         if(response.ok&&result.answer){
-          const cleaned=String(result.answer).replace(/^`{3}(?:json)?s*/i,"").replace(/s*`{3}$/,"");
+          const cleaned=String(result.answer).replace(/^`{3}(?:json)?\\s*/i,"").replace(/\\s*`{3}$/,"");
           const inferred=JSON.parse(cleaned);
           const valid=(value:unknown)=>typeof value==="string"&&columns.includes(value);
           detected={
@@ -228,7 +228,7 @@ function AgilePulse() {
       }catch{aiNote=" A importação foi concluída com reconhecimento automático local porque a IA não respondeu.";}
       setFileName(file.name);setSheetNames(wb.SheetNames);setSheet(wb.SheetNames[0]);
       setRows(parsed);setMapping(detected);setSource("imported");setPending(null);setEditorOpen(false);setFilter("Todas as sprints");
-      setUploadError("Importação automática concluída: "+parsed.length+" linhas em "+wb.SheetNames.length+" abas e "+columns.length+" colunas reconhecidas."+aiNote);
+      setUploadNotice("Importação automática concluída: "+parsed.length+" linhas em "+wb.SheetNames.length+" abas e "+columns.length+" colunas reconhecidas."+aiNote);
       setSourceOpen(true);
     } catch(e) {setPending(null);setUploadError(e instanceof Error?e.message:"Não foi possível processar o arquivo.");}
   }
@@ -250,7 +250,7 @@ function AgilePulse() {
     <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">MÉTRICAS DE FLUXO</div><h1>Throughput <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>Acompanhe o ritmo de entrega e explore os itens concluídos por sprint.</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
     {sourceOpen&&<section className="ap-panel ap-import"><div className="ap-panel-heading"><div><h2>Fontes de Dados</h2><p>Excel ou CSV · a IA identifica os campos e importa automaticamente todas as abas.</p></div><button className="ap-icon-button" onClick={()=>{setSourceOpen(false);setPending(null);}}><X size={18}/></button></div>
     <div className="ap-dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f)void parseFile(f);}}><FileUp size={26}/><strong>Selecione sua planilha</strong><span>Arraste o arquivo ou escolha no computador</span><small>.xlsx · .xls · .csv</small><input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={e=>{const f=e.target.files?.[0];if(f)void parseFile(f);}}/><button className="ap-button ap-primary" onClick={()=>fileRef.current?.click()}>Escolher arquivo</button></div>
-    {uploadError&&<div className="ap-error"><AlertCircle size={16}/>{uploadError}</div>}
+    {uploadError&&<div className="ap-error"><AlertCircle size={16}/>{uploadError}</div>}{uploadNotice&&<div className="ap-note">{uploadNotice}</div>}
     {pending&&<div className="ap-mapping"><div className="ap-file-info"><FileSpreadsheet size={20}/><div><strong>{fileName}</strong><span>{pending.length} linhas · {headers.length} colunas · prévia</span></div></div>{sheetNames.length>1&&<label className="ap-field">Aba do Excel<select value={sheet} onChange={e=>void changeSheet(e.target.value)}>{sheetNames.map(n=><option key={n}>{n}</option>)}</select></label>}
     <div className="ap-mapping-grid">{([{key:"sprint",label:"Sprint *"},{key:"item",label:"Identificador do item"},{key:"status",label:"Status *"},{key:"squad",label:"Squad (opcional)"},{key:"created",label:"Data de criação (Lead Time)"},{key:"started",label:"Data de início (Cycle Time)"},{key:"completed",label:"Data de conclusão (Lead/Cycle Time)"},{key:"storyPoints",label:"Story Points (Velocity)"}] as const).map(f=><label className="ap-field" key={f.key}>{f.label}<select value={mapping[f.key]} onChange={e=>setMapping(m=>({...m,[f.key]:e.target.value}))}><option value="">Não selecionada</option>{headers.map(h=><option key={h}>{h}</option>)}</select></label>)}</div>
     <label className="ap-field">Status que representam conclusão (separados por vírgula)<input value={statusText} onChange={e=>setStatusText(e.target.value)}/></label><div className="ap-preview"><strong>Prévia dos dados</strong><div className="ap-table-scroll"><table><thead><tr>{headers.slice(0,7).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{pending.slice(0,5).map((r,i)=><tr key={i}>{headers.slice(0,7).map(h=><td key={h}>{str(r[h])||"—"}</td>)}</tr>)}</tbody></table></div></div>
