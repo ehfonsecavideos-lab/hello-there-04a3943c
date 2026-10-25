@@ -247,7 +247,7 @@ function PhaseBands({data}:{data:any[]}) {
 function FlowChart({title,description,data,fullData,kind,unavailable}:{title:string;description:string;data:any[];fullData:any[];kind:"throughput"|"leadTime"|"cycleTime"|"velocity";unavailable:string}) {
   const hasValues=data.some(d=>kind==="throughput"?d.totalItems>0:kind==="leadTime"?d.leadTime!==null:kind==="cycleTime"?d.cycleTime!==null:d.velocity>0);
   const leadValues=data.map(d=>d.leadTime).filter((v):v is number=>typeof v==="number");
-  const total=data.reduce((sum,d)=>sum+d.totalItems,0);
+  const total=data.reduce((sum,d)=>sum+d.noReopen+d.reopened,0);
   const latest3=fullData.slice(-3); const netLast3=latest3.reduce((sum,d)=>sum+d.noReopen,0)/Math.max(1,latest3.length);
   return <section className="ap-chart-card ap-metric-card">
     <div className="ap-chart-heading"><div><div className="ap-chart-title"><Activity size={19}/><h2>{title}</h2></div><p>{description}</p></div></div>
