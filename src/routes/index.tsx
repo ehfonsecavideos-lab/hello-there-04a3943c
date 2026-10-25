@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, CartesianGrid, ComposedChart, Line, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import * as XLSX from "xlsx";
 import { Activity, AlertCircle, Check, ChevronDown, Database, FileSpreadsheet, FileUp, MessageCircle, Send, Sparkles, X } from "lucide-react";
 
@@ -211,6 +211,71 @@ function parseSheetRows(ws: XLSX.WorkSheet, headerIndex: number, startIndex: num
   }
   return rows;
 }
+
+const SPRINT_OPTIONS = Array.from({length:20},(_,i)=>"Sprint "+(i+1));
+function inclusiveP85(values:number[]):number|null {
+  if(!values.length)return null;
+  const sorted=[...values].sort((a,b)=>a-b);
+  const pos=(sorted.length-1)*0.85, lo=Math.floor(pos), hi=Math.ceil(pos);
+  return sorted[lo]+(sorted[hi]-sorted[lo])*(pos-lo);
+}
+function numeric(v:unknown):number|null { const n=Number(str(v).replace(",","."));return str(v)!==""&&Number.isFinite(n)?n:null; }
+function buildFlowSeries(rows:Row[], calendar:Row[], baseStats:ReturnType<typeof calculate>) {
+  const eventBySprint=new Map(calendar.map(r=>[str(r["Sprint"]),r]));
+  return SPRINT_OPTIONS.map((sprint,i)=>{
+    const items=rows.filter(r=>str(r["Sprint"])===sprint);
+    const completed=items.filter(r=>!!str(r["Concluído"]));
+    const leadValues=items.map(r=>numeric(r["Lead time (dias corridos)"])).filter((v):v is number=>v!==null&&v>=0);
+    const cycleValues=items.map(r=>numeric(r["Cycle time (dias corridos)"])).filter((v):v is number=>v!==null&&v>=0);
+    const noReopen=items.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
+    const reopened=items.filter(r=>(numeric(r["Reaberturas"])??0)>0).length;
+    const lead=leadValues.length?leadValues.reduce((a,b)=>a+b,0)/leadValues.length:null;
+    const cycle=cycleValues.length?cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length:null;
+    const velocity=completed.reduce((sum,r)=>sum+(numeric(r["Story Points"])??0),0);
+    const ev=eventBySprint.get(sprint);
+    return {sprint,sprintIndex:i+1,totalItems:items.length,noReopen,reopened,leadTime:lead,leadP85:inclusiveP85(leadValues),cycleTime:cycle,efficiency:lead!==null&&lead>0&&cycle!==null?(cycle/lead)*100:null,velocity,phase:str(ev?.["Fase"]),context:str(ev?.["Evento / contexto"]),leadCount:leadValues.length,cycleCount:cycleValues.length,throughput:noReopen+reopened};
+  });
+}
+function FlowTooltip({active,payload,label}:any) {
+  if(!active||!payload?.length)return null;
+  const row=payload[0]?.payload||{};
+  return <div style={{background:"#101d33",border:"1px solid #304565",borderRadius:10,padding:"10px 12px",color:"#f1f5ff",fontSize:11,maxWidth:260}}>
+    <strong>{label}</strong>{row.phase&&<div style={{marginTop:5,color:"#c4b5fd"}}>Fase: {row.phase}</div>}
+    {row.context&&<div style={{marginTop:4,color:"#b5c5de",whiteSpace:"normal"}}>Evento / contexto: {row.context}</div>}
+    {payload.map((p:any,i:number)=><div key={i} style={{marginTop:4,color:p.color||"#e5edfa"}}>{p.name}: {typeof p.value==="number"?p.value.toFixed(p.name==="Velocity"?0:1):p.value}{p.name?.includes("Time")?" dias corridos":p.name==="Eficiência de fluxo"?"%":""}</div>)}
+  </div>;
+}
+function PhaseBands({data}:{data:any[]}) {
+  const groups:any[]=[];
+  data.forEach((d,i)=>{const phase=d.phase||"Sem fase";const last=groups[groups.length-1];if(last&&last.phase===phase)last.end=d.sprint;else groups.push({phase,start:d.sprint,end:d.sprint,fill:phase==="Sem fase"?"#8293ad":(["Planejamento","Descoberta"].includes(phase)?"#4f86c6":(["Desenvolvimento","Construção"].includes(phase)?"#7b6bd6":(["Validação","Testes"].includes(phase)?"#3d9f8b":"#c28b4b"))});});
+  return <>{groups.map((g,i)=><ReferenceArea key={g.start+"-"+i} x1={g.start} x2={g.end} yAxisId="left" ifOverflow="hidden" fill={g.fill} fillOpacity={0.12} strokeOpacity={0}/>)}</>;
+}
+function FlowChart({title,description,data,kind,unavailable}:{title:string;description:string;data:any[];kind:"throughput"|"leadTime"|"cycleTime"|"velocity";unavailable:string}) {
+  const hasValues=data.some(d=>kind==="throughput"?d.totalItems>0:kind==="leadTime"?d.leadTime!==null:kind==="cycleTime"?d.cycleTime!==null:d.velocity>0);
+  const leadValues=data.map(d=>d.leadTime).filter((v):v is number=>typeof v==="number");
+  const p85=inclusiveP85(leadValues);
+  const total=data.reduce((sum,d)=>sum+d.totalItems,0);
+  const netLast3=data.slice(-3).reduce((sum,d)=>sum+d.noReopen,0)/Math.max(1,data.slice(-3).length);
+  return <section className="ap-chart-card ap-metric-card">
+    <div className="ap-chart-heading"><div><div className="ap-chart-title"><Activity size={19}/><h2>{title}</h2></div><p>{description}</p></div></div>
+    {kind==="throughput"&&<div className="ap-summary ap-flow-cards"><div><span>TOTAL DE ITENS</span><strong>{total}<small> itens</small></strong></div><div><span>MÉDIA POR SPRINT</span><strong>{(total/20).toFixed(1)}<small> itens</small></strong></div><div><span>THROUGHPUT LÍQUIDO MÉDIO · ÚLTIMAS 3</span><strong>{netLast3.toFixed(1)}<small> itens</small></strong></div></div>}
+    {kind==="leadTime"&&<div className="ap-summary ap-flow-cards"><div><span>MÉDIA GERAL</span><strong>{leadValues.length?(leadValues.reduce((a,b)=>a+b,0)/leadValues.length).toFixed(1):"—"}<small> dias corridos</small></strong></div><div><span>P85 GERAL · INCLUSIVO</span><strong>{p85===null?"—":p85.toFixed(1)}<small> dias corridos</small></strong></div></div>}
+    {hasValues?<div className="ap-chart-scroll"><div className="ap-chart-inner" style={{width:Math.max(980,data.length*58),height:340}}><ResponsiveContainer width="100%" height={330}><ComposedChart data={data} margin={{top:18,right:20,left:0,bottom:8}}>
+      <CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/>
+      <XAxis dataKey="sprint" tick={{fill:"#91a4c4",fontSize:10}} axisLine={{stroke:"#31435f"}} tickLine={false} interval={0}/>
+      <YAxis yAxisId="left" tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} width={48} />
+      {(kind==="cycleTime")&&<YAxis yAxisId="right" orientation="right" tick={{fill:"#91a4c4",fontSize:10}} axisLine={false} tickLine={false} width={48} unit="%"/>}
+      <PhaseBands data={data}/>
+      <Tooltip content={<FlowTooltip/>}/>
+      {kind==="throughput"&&<><Bar yAxisId="left" dataKey="noReopen" name="Itens sem reabertura" stackId="throughput" fill="#38bdf8" maxBarSize={32}/><Bar yAxisId="left" dataKey="reopened" name="Itens reabertos" stackId="throughput" fill="#c084fc" radius={[5,5,0,0]} maxBarSize={32}/></>}
+      {kind==="leadTime"&&<><Line yAxisId="left" type="monotone" dataKey="leadTime" name="Lead Time médio" stroke="#a78bfa" strokeWidth={2.5} connectNulls dot={{r:3}}/><Line yAxisId="left" type="monotone" dataKey="leadP85" name="P85 por sprint" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" connectNulls dot={false}/></>}
+      {kind==="cycleTime"&&<><Line yAxisId="left" type="monotone" dataKey="cycleTime" name="Cycle Time médio" stroke="#38bdf8" strokeWidth={2.5} connectNulls dot={{r:3}}/><Line yAxisId="right" type="monotone" dataKey="efficiency" name="Eficiência de fluxo" stroke="#34d399" strokeWidth={2} connectNulls dot={false}/></>}
+      {kind==="velocity"&&<Bar yAxisId="left" dataKey="velocity" name="Velocity" fill="#34d399" radius={[5,5,0,0]} maxBarSize={32}/>}
+    </ComposedChart></ResponsiveContainer></div></div>:<div className="ap-empty ap-metric-empty">{unavailable}</div>}
+    <div className="ap-phase-legend">{[...new Set(data.map(d=>d.phase||"Sem fase"))].map(phase=><span key={phase}><i/>{phase}</span>)}</div>
+  </section>;
+}
+
 function AgilePulse() {
   const [rows,setRows]=useState<Row[]>(demo), [source,setSource]=useState<"demo"|"imported">("demo"), [fileName,setFileName]=useState("");
   const [sheetsData,setSheetsData]=useState<Record<string,Row[]>>({});
@@ -219,11 +284,13 @@ function AgilePulse() {
   const [mapping,setMapping]=useState<MapCols>(guessMap(demo)), [statusText,setStatusText]=useState("Done, Concluído, Resolvido, Closed, Complete, Feito, Testado, Aprovado para Produção");
   const [sourceOpen,setSourceOpen]=useState(false), [editorOpen,setEditorOpen]=useState(false);
   const [uploadError,setUploadError]=useState(""), [uploadNotice,setUploadNotice]=useState("");
-  const [filter,setFilter]=useState("Todas as sprints"); const fileRef=useRef<HTMLInputElement>(null);
+  const [filter,setFilter]=useState("Todas"); const fileRef=useRef<HTMLInputElement>(null);
   const [storageReady,setStorageReady]=useState(false);
   const headers=Object.keys(rows[0]||{}), statuses=statusText.split(",").map(s=>s.trim()).filter(Boolean);
   const stats=useMemo(()=>calculate(rows,mapping,statuses),[rows,mapping,statusText]);
-  const chartRows=filter==="Todas as sprints"?stats.counts:stats.counts.filter(s=>s.sprint===filter);
+  const calendarRows=sheetsData["Calendario_Eventos"]||[];
+  const flowSeries=useMemo(()=>buildFlowSeries(rows,calendarRows,stats),[rows,calendarRows,stats]);
+  const chartRows=filter==="Todas"?flowSeries:flowSeries.filter(s=>s.sprint===filter);
   const importedItems=rows.length;
   const importedSprints=new Set(rows.map(r=>str(r["Sprint"])).filter(Boolean)).size;
   const missingOptional=OPTIONAL_SHEET_NAMES.filter(name=>!sheetNames.includes(name));
@@ -302,7 +369,7 @@ function AgilePulse() {
         }
       }
       const map:MapCols={sprint:"Sprint",item:"Issue key",status:"",squad:"Papel",created:"Criado",started:"",completed:"Concluído",storyPoints:"Story Points"};
-      setRows(normalizedRows);setMapping(map);setSheetsData(dataBySheet);setSheetNames(importedNames);setSnapshotDate(snapshot);setFileName(file.name);setSource("imported");setActivePage("Dashboard");setEditorOpen(false);setFilter("Todas as sprints");
+      setRows(normalizedRows);setMapping(map);setSheetsData(dataBySheet);setSheetNames(importedNames);setSnapshotDate(snapshot);setFileName(file.name);setSource("imported");setActivePage("Dashboard");setEditorOpen(false);setFilter("Todas");
       const optionalMissing=OPTIONAL_SHEET_NAMES.filter(n=>!importedNames.includes(n));
       setUploadNotice("Importação concluída: "+normalizedRows.length+" itens, "+new Set(normalizedRows.map(r=>str(r["Sprint"])).filter(Boolean)).size+" sprints e "+Object.keys(dataBySheet).length+" abas de dados. "+(missing.length?"Colunas obrigatórias ausentes: "+missing.join(", ")+". ":"")+(optionalMissing.length?"Abas opcionais ausentes: "+optionalMissing.join(", ")+".":""));
       setSourceOpen(true);
@@ -327,15 +394,15 @@ function AgilePulse() {
     <div className="ap-source-strip"><div className="ap-source-icon"><Database size={18}/></div><div><strong>{source==="demo"?"Dados demonstrativos (fictícios)":fileName}</strong><span>{source==="demo"?"Exemplo ilustrativo · não representa dados reais":"Dados ativos nesta sessão do navegador"}</span></div><div className="ap-source-state"><Check size={13}/>{source==="demo"?"Exemplo ativo":"Importação confirmada"} <button onClick={()=>setSourceOpen(true)}>Gerenciar</button></div><button className="ap-button ap-secondary ap-edit-toggle" onClick={()=>setEditorOpen(v=>!v)}><FileSpreadsheet size={15}/>{editorOpen?"Ocultar dados":"Visualizar e editar dados"}</button></div>
     {editorOpen&&<section className="ap-panel ap-data-editor"><div className="ap-panel-heading"><div><div><h2>Dados carregados</h2><p>Edite qualquer célula. Os gráficos e indicadores são recalculados automaticamente.</p></div></div><button className="ap-icon-button" onClick={()=>setEditorOpen(false)} aria-label="Fechar editor"><X size={18}/></button></div><div className="ap-editor-meta">{rows.length} linhas · {Object.keys(rows[0]||{}).length} colunas · alterações aplicadas em tempo real</div><div className="ap-table-scroll ap-edit-table"><table><thead><tr>{Object.keys(rows[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((row,rowIndex)=><tr key={rowIndex}>{Object.keys(rows[0]||{}).map(column=><td key={column}><input aria-label={`Linha ${rowIndex+1}, ${column}`} title={`${column} · linha ${rowIndex+1}`} value={str(row[column])} onChange={e=>updateCell(rowIndex,column,e.target.value)}/></td>)}</tr>)}</tbody></table></div><p className="ap-note"><AlertCircle size={14}/>As edições ficam nesta sessão do navegador. Para manter alterações fora desta sessão, exporte ou salve os dados em um arquivo.</p></section>}
     {activePage==="Dashboard"&&<>
-    <section className="ap-chart-card"><div className="ap-chart-heading"><div><div className="ap-chart-title"><Activity size={20}/><h2>Itens concluídos por sprint</h2></div><p>Quantidade de itens que atingiram um status de conclusão em cada sprint.</p></div></div>
-    <div className="ap-summary"><div><span>ITENS CONCLUÍDOS</span><strong>{stats.total}<small> itens</small></strong></div><div><span>MÉDIA POR SPRINT</span><strong>{stats.mean.toFixed(1)}<small> itens</small></strong></div><div><span>SPRINTS NO HISTÓRICO</span><strong>{stats.labels}</strong></div><div className="ap-quality"><i/>{qualityAlerts.length?qualityAlerts.length+" alerta(s) de qualidade":"Sem alertas de qualidade"}</div></div>
-    <div className="ap-chart-controls"><span><i/> Itens concluídos</span><label>Visualização <select value={filter} onChange={e=>setFilter(e.target.value)}><option>Todas as sprints</option>{stats.counts.map(s=><option key={s.sprint}>{s.sprint}</option>)}</select></label></div>
-    <div className="ap-chart-scroll"><div className="ap-chart-inner" style={{width:Math.max(640,chartRows.length*72)}}>{chartRows.length?<ResponsiveContainer width="100%" height={330}><BarChart data={chartRows} margin={{top:18,right:18,left:0,bottom:8}} barCategoryGap="36%"><defs><linearGradient id="throughputGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#c084fc"/><stop offset="55%" stopColor="#7775f5"/><stop offset="100%" stopColor="#3787e8"/></linearGradient></defs><CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="sprint" tick={{fill:"#91a4c4",fontSize:11}} axisLine={{stroke:"#31435f"}} tickLine={false} interval={0}/><YAxis allowDecimals={false} tick={{fill:"#91a4c4",fontSize:11}} axisLine={false} tickLine={false} width={35} domain={[0,(max:number)=>Math.max(4,max+1)]}/><Tooltip contentStyle={{background:"#101d33",border:"1px solid #304565",borderRadius:12,color:"#f1f5ff"}} cursor={{fill:"rgba(117,133,255,.08)"}} formatter={(v)=>[String(v)+" itens","Throughput"]}/><Bar dataKey="throughput" fill="url(#throughputGradient)" radius={[7,7,2,2]} maxBarSize={36}/></BarChart></ResponsiveContainer>:<div className="ap-empty">Nenhuma sprint disponível. Confira a coluna Sprint.</div>}</div></div><div className="ap-chart-footer"><span>Fonte: {source==="demo"?"dados fictícios":fileName}</span><span>Atualizado nesta sessão</span></div><InlineAssistant metricKey="throughput" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName}/></section>
-    <div className="ap-metric-grid">
-      <MetricChart title="Lead Time" description="Tempo médio entre a criação da demanda e sua conclusão, agrupado por sprint." data={chartRows} dataKey="leadTime" unit="dias" color="#a78bfa" metricKey="leadTime" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName} unavailable={mapping.created && mapping.completed ? "Não há datas válidas de criação e conclusão para calcular o Lead Time." : "Mapeie as colunas Data de criação e Data de conclusão na importação para calcular o Lead Time."}/>
-      <MetricChart title="Cycle Time" description="Tempo médio entre o início efetivo do trabalho e a conclusão, agrupado por sprint." data={chartRows} dataKey="cycleTime" unit="dias" color="#38bdf8" metricKey="cycleTime" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName} unavailable={mapping.started && mapping.completed ? "Não há datas válidas de início e conclusão para calcular o Cycle Time." : "Mapeie as colunas Data de início e Data de conclusão na importação para calcular o Cycle Time."}/>
-      <MetricChart title="Velocity" description="Soma dos Story Points dos itens concluídos em cada sprint." data={chartRows} dataKey="velocity" unit="pontos" color="#34d399" metricKey="velocity" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName} unavailable={mapping.storyPoints ? "Não há Story Points numéricos válidos nos itens concluídos." : "Mapeie a coluna Story Points na importação para calcular a Velocity."}/>
-    </div>}
-    </div></section>
-  </main>;
+    <div className="ap-chart-controls"><span><i/> Histórico de 20 sprints</span><label>Sprint <select value={filter} onChange={e=>setFilter(e.target.value)}><option>Todas</option>{SPRINT_OPTIONS.map(s=><option key={s}>{s}</option>)}</select></label></div>
+    <div className="ap-flow-grid">
+      <FlowChart title="Throughput" description="Itens por sprint, separados entre itens sem reabertura e itens reabertos." data={chartRows} kind="throughput" unavailable="Não há itens nas sprints selecionadas."/>
+      <FlowChart title="Lead Time" description="Média por sprint e P85 inclusivo, em dias corridos." data={chartRows} kind="leadTime" unavailable="Não há valores válidos na coluna Lead time (dias corridos)."/>
+      <FlowChart title="Cycle Time" description="Média por sprint e eficiência de fluxo (Cycle Time ÷ Lead Time)." data={chartRows} kind="cycleTime" unavailable="Não há valores válidos nas colunas Cycle time (dias corridos) e Lead time (dias corridos)."/>
+      <FlowChart title="Velocity" description="Soma dos Story Points dos itens concluídos em cada sprint." data={chartRows} kind="velocity" unavailable="Não há Story Points numéricos válidos nos itens concluídos."/>
+    </div>
+    <div className="ap-chart-footer"><span>Fonte: {source==="demo"?"dados fictícios":fileName}</span><span>Faixas de fase e eventos usam Calendario_Eventos.</span></div>
+    <InlineAssistant metricKey="throughput" stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={source==="demo"?"dados demonstrativos":fileName}/>
+    </>}
+
 }
