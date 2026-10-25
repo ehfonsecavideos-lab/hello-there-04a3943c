@@ -235,3 +235,18 @@ body { margin:0; }
   .ap-inline-assistant .ap-chart-actions { flex-direction:column; }
   .ap-inline-assistant .ap-button { width:100%; }
 }
+
+
+/* Editable imported data grid */
+.ap-source-strip { flex-wrap:wrap; }
+.ap-edit-toggle { margin-left:auto; }
+.ap-data-editor { margin-top:-4px; }
+.ap-editor-meta { color:#8295b4;font-size:10px;margin:-5px 0 12px; }
+.ap-edit-table { max-height:520px; }
+.ap-edit-table table { min-width:max-content;width:100%; }
+.ap-edit-table th { position:sticky;top:0;z-index:1; }
+.ap-edit-table td { padding:4px;min-width:150px; }
+.ap-edit-table td input { width:100%;min-width:135px;border:1px solid transparent;border-radius:5px;background:transparent;color:#d6e2f5;padding:8px;font:inherit;font-size:10px;outline:none; }
+.ap-edit-table td input:hover { border-color:#344966;background:#101f35; }
+.ap-edit-table td input:focus { border-color:#827bff;background:#0b172a;box-shadow:0 0 0 2px #827bff22; }
+@media (max-width:640px) { .ap-source-strip { align-items:flex-start; }.ap-edit-toggle { margin-left:0;width:100%; }.ap-edit-table { max-height:420px; } }
