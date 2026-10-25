@@ -8,14 +8,16 @@
 - Análise estatística local com média, mediana, extremos, variações e limitações.
 - Chat embutido com respostas locais determinísticas e endpoint opcional para IA generativa.
 
-## Configurar IA generativa
-O endpoint `POST /api/ai` usa a API compatível com OpenAI. Configure os segredos no ambiente do servidor (não no código do navegador):
+## Configurar Claude (IA generativa)
 
-- `OPENAI_API_KEY` — obrigatório.
-- `OPENAI_MODEL` — opcional; padrão `gpt-4o-mini`.
-- `OPENAI_BASE_URL` — opcional; padrão `https://api.openai.com/v1`.
+O endpoint `POST /api/ai` usa diretamente a API oficial da Anthropic. Configure os segredos no ambiente do servidor/Lovable, nunca no código do navegador:
 
-Sem `OPENAI_API_KEY`, o endpoint retorna `503 AI_NOT_CONFIGURED`. A interface apresenta cálculos locais e não afirma que a IA generativa está ativa.
+- `ANTHROPIC_API_KEY` — obrigatório.
+- `ANTHROPIC_MODEL` — opcional; padrão `claude-sonnet-4-20250514`.
+
+Sem `ANTHROPIC_API_KEY`, o dashboard mantém a análise estatística e as respostas locais de fallback, mas a análise generativa e o chat não serão executados pelo Claude.
+
+Cada gráfico tem sua própria área de análise e chat logo abaixo dele. O conteúdo enviado ao modelo é limitado e contextualizado para a métrica selecionada.
 
 ## Limitações atuais
 - A planilha é processada na sessão do navegador e não é persistida em banco compartilhado.
