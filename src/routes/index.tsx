@@ -211,7 +211,7 @@ function AgilePulse() {
         })});
         const result=await response.json();
         if(response.ok&&result.answer){
-          const cleaned=String(result.answer).replace(/^`{3}(?:json)?\\s*/i,"").replace(/\\s*`{3}$/,"");
+          const cleaned=String(result.answer).replace(/^`{3}(?:json)?\s*/i,"").replace(/\s*`{3}$/,"");
           const inferred=JSON.parse(cleaned);
           const valid=(value:unknown)=>typeof value==="string"&&columns.includes(value);
           detected={
