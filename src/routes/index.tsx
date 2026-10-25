@@ -125,15 +125,6 @@ function localAnswer(q: string, stats: ReturnType<typeof calculate>, rows: Row[]
   if (/queda|caiu|diminu/.test(n)) { const drops=stats.counts.slice(1).map((s,i)=>({p:stats.counts[i],s,d:s.throughput-stats.counts[i].throughput})).filter(x=>x.d<0); return drops.length ? "Quedas observadas:\n"+drops.map(x=>x.p.sprint+" → "+x.s.sprint+": "+x.p.throughput+" para "+x.s.throughput+" ("+x.d+").").join("\n")+"\nThroughput não identifica a causa. Colete dados de bloqueios, capacidade e mudanças de escopo." : "Não há quedas entre sprints consecutivas nos dados carregados."; }
   return "Posso calcular maior/menor Throughput, média, mediana, variações, uma sprint específica ou comparação por squad. Esta resposta é calculada localmente. Para respostas generativas, ative a IA nativa do Lovable neste projeto.";
 }
-function MetricChart({ title, description, data, dataKey, unit, color, unavailable, metricKey, stats, rows, mapping, statuses, sourceLabel }: { title:string; description:string; data: {sprint:string; [key:string]: any}[]; dataKey:string; unit:string; color:string; unavailable:string; metricKey:MetricKey; stats:ReturnType<typeof calculate>; rows:Row[]; mapping:MapCols; statuses:string[]; sourceLabel:string }) {
-  const available = data.some(d => typeof d[dataKey] === "number" && Number.isFinite(d[dataKey]));
-  const chartData = data.filter(d => typeof d[dataKey] === "number" && Number.isFinite(d[dataKey]));
-  return <section className="ap-chart-card ap-metric-card">
-    <div className="ap-chart-heading"><div><div className="ap-chart-title"><Activity size={19}/><h2>{title}</h2></div><p>{description}</p></div></div>
-    {available ? <div className="ap-chart-scroll"><div className="ap-chart-inner" style={{width:Math.max(640,chartData.length*72)}}><ResponsiveContainer width="100%" height={260}><BarChart data={chartData} margin={{top:16,right:16,left:0,bottom:8}} barCategoryGap="36%"><CartesianGrid stroke="#263853" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="sprint" tick={{fill:"#91a4c4",fontSize:11}} axisLine={{stroke:"#31435f"}} tickLine={false} interval={0}/><YAxis tick={{fill:"#91a4c4",fontSize:11}} axisLine={false} tickLine={false} width={45} domain={[0,(max:number)=>Math.max(1,Math.ceil(max*1.15))]}/><Tooltip contentStyle={{background:"#101d33",border:"1px solid #304565",borderRadius:12,color:"#f1f5ff"}} formatter={(v)=>[typeof v==="number"?v.toFixed(1)+" "+unit:String(v)+" "+unit,title]}/><Bar dataKey={dataKey} fill={color} radius={[7,7,2,2]} maxBarSize={36}/></BarChart></ResponsiveContainer></div></div> : <div className="ap-empty ap-metric-empty">{unavailable}</div>}
-    <InlineAssistant metricKey={metricKey} stats={stats} rows={rows} mapping={mapping} statuses={statuses} sourceLabel={sourceLabel}/>
-  </section>;
-}
 function metricAnalysis(stats: ReturnType<typeof calculate>, key: MetricKey): string[] {
   const series = stats.counts.map(s => ({sprint:s.sprint, value:s[key]})).filter((x): x is {sprint:string;value:number} => typeof x.value === "number" && Number.isFinite(x.value));
   if (!series.length) return ["Não há valores válidos para "+metricNames[key]+". Confira o mapeamento das colunas e os dados importados.", "A análise só será calculada quando houver datas válidas para Lead Time/Cycle Time ou Story Points numéricos para Velocity.", "Não é possível identificar tendências sem valores válidos.", "Nenhum resultado foi inventado; importe ou mapeie os campos necessários."];
@@ -220,7 +211,7 @@ function inclusiveP85(values:number[]):number|null {
   return sorted[lo]+(sorted[hi]-sorted[lo])*(pos-lo);
 }
 function numeric(v:unknown):number|null { const n=Number(str(v).replace(",","."));return str(v)!==""&&Number.isFinite(n)?n:null; }
-function buildFlowSeries(rows:Row[], calendar:Row[], baseStats:ReturnType<typeof calculate>) {
+function buildFlowSeries(rows:Row[], calendar:Row[]) {
   const eventBySprint=new Map(calendar.map(r=>[str(r["Sprint"]),r]));
   const allLead=rows.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
   const overallP85=inclusiveP85(allLead);
@@ -255,7 +246,6 @@ function PhaseBands({data}:{data:any[]}) {
 function FlowChart({title,description,data,kind,unavailable}:{title:string;description:string;data:any[];kind:"throughput"|"leadTime"|"cycleTime"|"velocity";unavailable:string}) {
   const hasValues=data.some(d=>kind==="throughput"?d.totalItems>0:kind==="leadTime"?d.leadTime!==null:kind==="cycleTime"?d.cycleTime!==null:d.velocity>0);
   const leadValues=data.map(d=>d.leadTime).filter((v):v is number=>typeof v==="number");
-  const p85=inclusiveP85(leadValues);
   const total=data.reduce((sum,d)=>sum+d.totalItems,0);
   const netLast3=data.slice(-3).reduce((sum,d)=>sum+d.noReopen,0)/Math.max(1,data.slice(-3).length);
   return <section className="ap-chart-card ap-metric-card">
@@ -291,7 +281,7 @@ function AgilePulse() {
   const headers=Object.keys(rows[0]||{}), statuses=statusText.split(",").map(s=>s.trim()).filter(Boolean);
   const stats=useMemo(()=>calculate(rows,mapping,statuses),[rows,mapping,statusText]);
   const calendarRows=sheetsData["Calendario_Eventos"]||[];
-  const flowSeries=useMemo(()=>buildFlowSeries(rows,calendarRows,stats),[rows,calendarRows,stats]);
+  const flowSeries=useMemo(()=>buildFlowSeries(rows,calendarRows),[rows,calendarRows]);
   const chartRows=filter==="Todas"?flowSeries:flowSeries.filter(s=>s.sprint===filter);
   const importedItems=rows.length;
   const importedSprints=new Set(rows.map(r=>str(r["Sprint"])).filter(Boolean)).size;
