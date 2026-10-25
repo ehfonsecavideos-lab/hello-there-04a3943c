@@ -130,10 +130,10 @@ function metricLocalAnswer(q: string, stats: ReturnType<typeof calculate>, key: 
   if (/m[eé]dia|media|average/.test(n)) return "Média de "+metricNames[key]+": "+mean.toFixed(2)+" "+unit+" por sprint, considerando "+series.length+" sprints com dados válidos.";
   if (/maior|maximo|máximo|mais alto|mais longa|maior valor/.test(n)) return max.sprint+" teve o maior "+metricNames[key]+": "+max.value.toFixed(2)+" "+unit+".";
   if (/menor|minimo|mínimo|mais baixo|mais curta|menor valor/.test(n)) return min.sprint+" teve o menor "+metricNames[key]+": "+min.value.toFixed(2)+" "+unit+".";
-  if (/queda|caiu|diminu|varia|diferen/.test(n)) { const changes=series.slice(1).map((x,i)=>({from:series[i],to:x,d:x.value-series[i].value})); return changes.length?changes.map(x=>x.from.sprint+" → "+x.to.sprint+": "+x.from.value.toFixed(1)+" → "+x.to.value.toFixed(1)+" ("+(x.d>0?"+":"")+x.d.toFixed(1)+" "+unit+")").join("\\n"):"Não há sprints suficientes para comparar."; }
+  if (/queda|caiu|diminu|varia|diferen/.test(n)) { const changes=series.slice(1).map((x,i)=>({from:series[i],to:x,d:x.value-series[i].value})); return changes.length?changes.map(x=>x.from.sprint+" → "+x.to.sprint+": "+x.from.value.toFixed(1)+" → "+x.to.value.toFixed(1)+" ("+(x.d>0?"+":"")+x.d.toFixed(1)+" "+unit+")").join("\n"):"Não há sprints suficientes para comparar."; }
   const match=q.match(/sprint\s*(\d+)/i);
   if(match){const s=series.find(x=>sprintNum(x.sprint)===Number(match[1]));return s?s.sprint+": "+s.value.toFixed(2)+" "+unit+".":"Não encontrei essa sprint com valores válidos para "+metricNames[key]+".";}
-  return metricAnalysis(stats,key).join("\\n");
+  return metricAnalysis(stats,key).join("\n");
 }
 function AgilePulse() {
   const [rows,setRows]=useState<Row[]>(demo), [source,setSource]=useState<"demo"|"imported">("demo"), [fileName,setFileName]=useState("");
