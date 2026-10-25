@@ -64,7 +64,12 @@ function guessMap(rows: Row[]): MapCols {
     storyPoints: find([/^story points$/, /story point/, /pontos da historia/, /pontos de historia/, /estimativa.*ponto/])
   };
 }
-function sprintNum(s: string) { const m = s.match(/\d+/); return m ? Number(m[0]) : Number.MAX_SAFE_INTEGER; }
+function sprintNum(s: string) { const m = str(s).match(/\d+/); return m ? Number(m[0]) : Number.MAX_SAFE_INTEGER; }
+function sameSprint(a: unknown, b: unknown): boolean {
+  const left = sprintNum(str(a)), right = sprintNum(str(b));
+  if (left !== Number.MAX_SAFE_INTEGER && right !== Number.MAX_SAFE_INTEGER) return left === right;
+  return normalize(a) === normalize(b);
+}
 function done(v: unknown, statuses: string[]) { return statuses.some(s => normalize(s) === normalize(v)); }
 function dateValue(value: unknown): Date | null {
   if(value instanceof Date && !Number.isNaN(value.getTime())) return new Date(value.getFullYear(),value.getMonth(),value.getDate());
@@ -213,12 +218,12 @@ function inclusiveP85(values:number[]):number|null {
 function numeric(v:unknown):number|null { const n=Number(str(v).replace(",","."));return str(v)!==""&&Number.isFinite(n)?n:null; }
 function isCompletedRow(r:Row):boolean { return !!str(r["Concluído"]) || (str(r["Issue Status"]) ? completedDefaults.some(s=>normalize(s)===normalize(r["Issue Status"])) : !!str(r["Resolution Date"])); }
 function buildFlowSeries(rows:Row[], calendar:Row[]) {
-  const eventBySprint=new Map(calendar.map(r=>[str(r["Sprint"]),r]));
+  const eventForSprint=(sprint:string)=>calendar.find(r=>sameSprint(r["Sprint"],sprint));
   const allLead=rows.filter(isCompletedRow).map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
   const overallP85=inclusiveP85(allLead);
   const overallLeadMean=allLead.length?allLead.reduce((sum,v)=>sum+v,0)/allLead.length:null;
   return SPRINT_OPTIONS.map((sprint,i)=>{
-    const items=rows.filter(r=>str(r["Sprint"])===sprint);
+    const items=rows.filter(r=>sameSprint(r["Sprint"],sprint));
     const completed=items.filter(isCompletedRow);
     const leadValues=completed.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
     const cycleValues=completed.map(r=>numeric(r["Cycle time (dias corridos)"])??elapsedDays(r["In development"]??r["Development Start Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
@@ -227,7 +232,7 @@ function buildFlowSeries(rows:Row[], calendar:Row[]) {
     const lead=leadValues.length?leadValues.reduce((a,b)=>a+b,0)/leadValues.length:null;
     const cycle=cycleValues.length?cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length:null;
     const velocity=completed.reduce((sum,r)=>sum+(numeric(r["Story Points"])??0),0);
-    const ev=eventBySprint.get(sprint);
+    const ev=eventForSprint(sprint);
     return {sprint,sprintIndex:i+1,totalItems:items.length,noReopen,reopened,leadTime:lead,leadP85:inclusiveP85(leadValues),cycleTime:cycle,efficiency:lead!==null&&lead>0&&cycle!==null?(cycle/lead)*100:null,velocity,phase:str(ev?.["Fase"]),context:str(ev?.["Evento / contexto"]),leadP85General:overallP85,leadMeanGeneral:overallLeadMean,leadCount:leadValues.length,cycleCount:cycleValues.length,throughput:noReopen+reopened};
   });
 }
@@ -295,7 +300,7 @@ function wipReference(rows:Row[]) {
   const cycleValues=valid.filter(r=>last3.includes(r.sprint)&&r.cycle!==null&&r.cycle>=0).map(r=>r.cycle as number);
   const cycleMean=cycleValues.length?cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length:null;
   const latest=sprints[sprints.length-1]||"";
-  const latestRows=rows.filter(r=>str(r["Sprint"])===latest);
+  const latestRows=rows.filter(r=>sameSprint(r["Sprint"],latest));
   const completed=latestRows.filter(isCompletedRow);
   const throughput=completed.length;
   const leads=completed.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
@@ -386,10 +391,10 @@ function QualityReworkPage({defects,rework,calendar,premises,baseRows,source}:{d
     return unique.sort((a,b)=>sprintNum(a)-sprintNum(b)||a.localeCompare(b,"pt-BR",{numeric:true}));
   },[baseRows,defects,rework,calendar]);
   const data=useMemo(()=>sprintLabels.map(sprint=>{
-    const d=defects.filter(r=>str(r["Sprint de detecção"])===sprint);
-    const rw=rework.filter(r=>str(r["Sprint do item"])===sprint);
-    const cal=calendar.find(r=>str(r["Sprint"])===sprint);
-    const throughput=baseRows.filter(r=>str(r["Sprint"])===sprint&&isCompletedRow(r)).length;
+    const d=defects.filter(r=>sameSprint(r["Sprint de detecção"],sprint));
+    const rw=rework.filter(r=>sameSprint(r["Sprint do item"],sprint));
+    const cal=calendar.find(r=>sameSprint(r["Sprint"],sprint));
+    const throughput=baseRows.filter(r=>sameSprint(r["Sprint"],sprint)&&isCompletedRow(r)).length;
     const originCounts=Object.fromEntries(DEFECT_ORIGINS.map(o=>[o,d.filter(r=>normalize(r["Origem"])===normalize(o)).length])) as Record<string,number>;
     const defectCount=d.length, school=d.filter(r=>normalize(r["Origem"])===normalize("Escola-piloto")).length;
     const correction=d.reduce((sum,r)=>sum+(numeric(r["Horas de correção"])??0),0);
@@ -525,10 +530,10 @@ function BottleneckDoraPage({baseRows,defects,doraSprints,premises,source}:{base
       return {lead,wait:(wqa===null?0:wqa)+(wreview===null?0:wreview)+q};
     }).filter((v):v is {lead:number;wait:number}=>v!==null&&v.lead>0);
     const waitPct=waitValues.length?waitValues.reduce((a,b)=>a+b.wait,0)/waitValues.reduce((a,b)=>a+b.lead,0)*100:null;
-    const doraRow=doraSprints.find(r=>str(r["Sprint"])===sprint);
+    const doraRow=doraSprints.find(r=>sameSprint(r["Sprint"],sprint));
     const deploys=numeric(doraRow?.["Deploys na sprint"]);
-    const failed=defects.filter(r=>str(r["Sprint de detecção"])===sprint&&/^(sim|yes|true|1)$/i.test(str(r["Causou falha de deploy?"])));
-    const allFailures=defects.filter(r=>str(r["Sprint de detecção"])===sprint&&str(r["Causou falha de deploy?"])!=="");
+    const failed=defects.filter(r=>sameSprint(r["Sprint de detecção"],sprint)&&/^(sim|yes|true|1)$/i.test(str(r["Causou falha de deploy?"])));
+    const allFailures=defects.filter(r=>sameSprint(r["Sprint de detecção"],sprint)&&str(r["Causou falha de deploy?"])!=="");
     const restoration=failed.map(r=>numeric(r["Horas para restaurar"])).filter((v):v is number=>v!==null&&v>=0);
     const recovery=failed.length&&restoration.length?restoration.reduce((a,b)=>a+b,0)/restoration.length:null;
     const cfr=deploys!==null&&deploys>0?failed.length/deploys*100:null;
@@ -536,7 +541,7 @@ function BottleneckDoraPage({baseRows,defects,doraSprints,premises,source}:{base
   }),[sprintLabels,baseRows,defects,doraSprints]);
   const shown=period==="Todas"?data:data.filter(d=>d.sprint===period);
   const waitTotals=shown.reduce<{wait:number;lead:number}>((totals,d)=>{
-    const items=baseRows.filter(r=>str(r["Sprint"])===d.sprint);
+    const items=baseRows.filter(r=>sameSprint(r["Sprint"],d.sprint));
     return items.reduce<{wait:number;lead:number}>((acc,r)=>{
       const lead=numeric(r["Lead time (dias corridos)"]),cycle=numeric(r["Cycle time (dias corridos)"]);
       if(lead===null||cycle===null||lead<=0)return acc;
@@ -622,7 +627,7 @@ function DecisionRisksPage({baseRows,backlog,premises,risks,defects,rework,calen
   const actionCost=actionCostRaw.trim()!==""&&Number.isFinite(actionInput)&&actionInput>=0?actionInput:null;
   const allSprintNames=useMemo(()=>[...new Set(baseRows.map(r=>str(r["Sprint"])).filter(Boolean))].sort((a,b)=>sprintNum(a)-sprintNum(b)||a.localeCompare(b,"pt-BR",{numeric:true})),[baseRows]);
   const sprintFacts=useMemo(()=>allSprintNames.map(sprint=>{
-    const items=baseRows.filter(r=>str(r["Sprint"])===sprint&&isCompletedRow(r));
+    const items=baseRows.filter(r=>sameSprint(r["Sprint"],sprint)&&isCompletedRow(r));
     const net=items.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
     const reopened=items.filter(r=>(numeric(r["Reaberturas"])??0)>0).length;
     const lead=items.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
@@ -661,9 +666,9 @@ function DecisionRisksPage({baseRows,backlog,premises,risks,defects,rework,calen
   const last3SprintNames=latest3.map(s=>s.sprint);
   const defectsInLast3=defects.filter(r=>last3SprintNames.includes(str(r["Sprint de detecção"])));
   const failures=defectsInLast3.filter(r=>/^(sim|yes|true|1)$/i.test(str(r["Causou falha de deploy?"])));
-  const deployTotal=latest3.reduce((sum,s)=>sum+(numeric(doraSprints.find(r=>str(r["Sprint"])===s.sprint)?.["Deploys na sprint"])??0),0);
+  const deployTotal=latest3.reduce((sum,s)=>sum+(numeric(doraSprints.find(r=>sameSprint(r["Sprint"],s.sprint))?.["Deploys na sprint"])??0),0);
   const escapePerSprint=latest3.map(s=>{
-    const ds=defects.filter(r=>str(r["Sprint de detecção"])===s.sprint);
+    const ds=defects.filter(r=>sameSprint(r["Sprint de detecção"],s.sprint));
     return ds.length?ds.filter(r=>normalize(r["Origem"])===normalize("Escola-piloto")).length/ds.length*100:null;
   }).filter((v):v is number=>v!==null);
   const cfr=deployTotal>0?failures.length/deployTotal*100:null;
@@ -672,9 +677,9 @@ function DecisionRisksPage({baseRows,backlog,premises,risks,defects,rework,calen
   const leadP85Values=latest3.flatMap(s=>s.lead);
   const sortedLeads=[...leadP85Values].sort((a,b)=>a-b);
   const leadP85=sortedLeads.length?sortedLeads[Math.min(sortedLeads.length-1,Math.ceil(.85*sortedLeads.length)-1)]:null;
-  const reworkHours=rework.filter(r=>last3SprintNames.includes(str(r["Sprint do item"]))).reduce((sum,r)=>sum+(numeric(r["Horas de retrabalho"])??0),0);
-  const correctionHours=defects.filter(r=>last3SprintNames.includes(str(r["Sprint de detecção"]))).reduce((sum,r)=>sum+(numeric(r["Horas de correção"])??0),0);
-  const capacity=calendar.filter(r=>last3SprintNames.includes(str(r["Sprint"]))).reduce((sum,r)=>sum+(numeric(r["Capacidade (h)"])??0),0);
+  const reworkHours=rework.filter(r=>last3SprintNames.some(s=>sameSprint(s,r["Sprint do item"]))).reduce((sum,r)=>sum+(numeric(r["Horas de retrabalho"])??0),0);
+  const correctionHours=defects.filter(r=>last3SprintNames.some(s=>sameSprint(s,r["Sprint de detecção"]))).reduce((sum,r)=>sum+(numeric(r["Horas de correção"])??0),0);
+  const capacity=calendar.filter(r=>last3SprintNames.some(s=>sameSprint(s,r["Sprint"]))).reduce((sum,r)=>sum+(numeric(r["Capacidade (h)"])??0),0);
   const reworkPct=capacity>0?(reworkHours+correctionHours)/capacity*100:null;
   const currentValues:Record<string,number|null>={
     escape:avg(escapePerSprint),
@@ -755,10 +760,10 @@ function ExecutiveSummaryPage({baseRows,defects,rework,calendar,doraSprints,prem
  const data=sprints.map(sprint=>{
   const items=baseRows.filter(r=>str(r["Sprint"])===sprint&&isCompletedRow(r)), gross=items.length, net=items.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
   const lead=items.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
-  const ds=defects.filter(r=>str(r["Sprint de detecção"])===sprint), school=ds.filter(r=>normalize(r["Origem"])===normalize("Escola-piloto")).length;
-  const rw=rework.filter(r=>str(r["Sprint do item"])===sprint), cap=numeric(calendar.find(r=>str(r["Sprint"])===sprint)?.["Capacidade (h)"]);
+  const ds=defects.filter(r=>sameSprint(r["Sprint de detecção"],sprint)), school=ds.filter(r=>normalize(r["Origem"])===normalize("Escola-piloto")).length;
+  const rw=rework.filter(r=>sameSprint(r["Sprint do item"],sprint)), cap=numeric(calendar.find(r=>sameSprint(r["Sprint"],sprint))?.["Capacidade (h)"]);
   const hours=rw.reduce((a,r)=>a+(numeric(r["Horas de retrabalho"])??0),0)+ds.reduce((a,r)=>a+(numeric(r["Horas de correção"])??0),0);
-  const deploy=numeric(doraSprints.find(r=>str(r["Sprint"])===sprint)?.["Deploys na sprint"]), failed=ds.filter(r=>/^(sim|yes|true|1)$/i.test(str(r["Causou falha de deploy?"])));
+  const deploy=numeric(doraSprints.find(r=>sameSprint(r["Sprint"],sprint))?.["Deploys na sprint"]), failed=ds.filter(r=>/^(sim|yes|true|1)$/i.test(str(r["Causou falha de deploy?"])));
   const recovery=failed.map(r=>numeric(r["Horas para restaurar"])).filter((v):v is number=>v!==null&&v>=0);
   return {sprint,n:sprintNum(sprint),gross,net,lead:avgNumbers(lead),p85:inclusiveP85(lead),defect: gross?ds.length/gross*100:null,escape:ds.length?school/ds.length*100:null,rework:cap!==null&&cap>0?hours/cap*100:null,cfr:deploy!==null&&deploy>0?failed.length/deploy*100:null,recovery:avgNumbers(recovery),leadValues:lead,recoveryValues:recovery,defects:ds.length,school,deploy,failures:failed.length};
  });
@@ -844,7 +849,7 @@ function AgilePulse() {
         if(Number.isFinite(cycle)&&Math.abs(sum-cycle)>0.01)alerts.push("Soma das 5 etapas difere do cycle time: "+key);
       }
       const sprint=str(r["Sprint"]), completed=dateValue(r["Concluído"]);
-      const event=calendar.find(c=>str(c["Sprint"])===sprint);
+      const event=calendar.find(c=>sameSprint(c["Sprint"],sprint));
       const begin=event?dateValue(event["Início"]):null, end=event?dateValue(event["Fim"]):null;
       if(completed&&begin&&end&&(completed<begin||completed>end))alerts.push("Data de conclusão fora da sprint: "+key);
     });
