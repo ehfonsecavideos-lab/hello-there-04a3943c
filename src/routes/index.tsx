@@ -328,7 +328,7 @@ function WipAgingPage({rows,snapshotDate,baseRows,source}:{rows:Row[];snapshotDa
           <div className="ap-wip-chart-scroll"><div style={{height:Math.max(180,items.length*42),minWidth:640}}><ResponsiveContainer width="100%" height="100%"><BarChart data={items} layout="vertical" margin={{top:10,right:35,left:22,bottom:10}} barCategoryGap="22%">
             <CartesianGrid stroke="#263853" strokeDasharray="3 5" horizontal={false}/>
             <XAxis type="number" tick={{fill:"#91a4c4",fontSize:10}} axisLine={{stroke:"#31435f"}} tickLine={false} label={{value:"Idade (dias corridos)",position:"insideBottom",offset:-4,fill:"#91a4c4",fontSize:10}}/>
-            <YAxis type="category" dataKey="key" width={100} tick={{fill:"#cbd8ed",fontSize:10}} axisLine={false} tickLine={false} />
+            <YAxis type="category" dataKey="key" reversed width={100} tick={{fill:"#cbd8ed",fontSize:10}} axisLine={false} tickLine={false} />
             <Tooltip content={<WipAgeTooltip/>}/>
             {limit!==null&&<ReferenceLine x={limit} stroke="#f87171" strokeWidth={2} strokeDasharray="6 4" label={{value:"Limite de alerta",position:"top",fill:"#f87171",fontSize:10}}/>}
             <Bar dataKey="age" name="Idade (dias corridos)" maxBarSize={24} radius={[0,5,5,0]} isAnimationActive={false}>
