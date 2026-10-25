@@ -535,9 +535,9 @@ function BottleneckDoraPage({baseRows,defects,doraSprints,premises,source}:{base
     return {sprint,...stageMeans,queue,cycleMean,leadMean,slowest,waitPct,deploys,deploysPerWeek:deploys===null?null:deploys/2,failedCount:failed.length,reportedFailures:allFailures.length,cfr,recovery};
   }),[sprintLabels,baseRows,defects,doraSprints]);
   const shown=period==="Todas"?data:data.filter(d=>d.sprint===period);
-  const waitTotals=shown.reduce((totals,d)=>{
+  const waitTotals=shown.reduce<{wait:number;lead:number}>((totals,d)=>{
     const items=baseRows.filter(r=>str(r["Sprint"])===d.sprint);
-    return items.reduce((acc,r)=>{
+    return items.reduce<{wait:number;lead:number}>((acc,r)=>{
       const lead=numeric(r["Lead time (dias corridos)"]),cycle=numeric(r["Cycle time (dias corridos)"]);
       if(lead===null||cycle===null||lead<=0)return acc;
       const waiting=(numeric(r["Waiting for QA"])||0)+(numeric(r["Waiting for review"])||0)+Math.max(0,lead-cycle);
