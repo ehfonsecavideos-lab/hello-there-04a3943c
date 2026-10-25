@@ -250,3 +250,29 @@ body { margin:0; }
 .ap-edit-table td input:hover { border-color:#344966;background:#101f35; }
 .ap-edit-table td input:focus { border-color:#827bff;background:#0b172a;box-shadow:0 0 0 2px #827bff22; }
 @media (max-width:640px) { .ap-source-strip { align-items:flex-start; }.ap-edit-toggle { margin-left:0;width:100%; }.ap-edit-table { max-height:420px; } }
+
+
+/* Structured workbook import, data pages, and quality checks */
+.ap-subnav { padding-left:28px;font-size:11px; }
+.ap-missing-dot { margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;background:#5c3a2d;color:#ffbf9a;font-size:10px; }
+.ap-import-choice { display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px;color:#8295b4;font-size:11px; }
+.ap-imported-counts { display:flex;gap:12px;flex-wrap:wrap;margin:12px 0; }
+.ap-imported-counts>div { flex:1;min-width:130px;padding:14px 16px;border:1px solid #263853;border-radius:12px;background:#0d192d; }
+.ap-imported-counts span { display:block;color:#8295b4;font-size:10px;letter-spacing:.08em; }
+.ap-imported-counts strong { display:block;margin-top:7px;color:#eef4ff;font-size:21px; }
+.ap-quality-panel,.ap-data-page,.ap-missing-sheets { margin:12px 0 16px; }
+.ap-quality-panel .ap-panel-heading h2 { display:flex;align-items:center;gap:8px; }
+.ap-quality-count { flex-shrink:0;color:#b9c9e3;font-size:11px;padding:6px 9px;border:1px solid #31435f;border-radius:20px; }
+.ap-quality-panel ul { margin:0;padding:0 0 0 19px;color:#ffcfaa;font-size:12px;line-height:1.7; }
+.ap-data-page .ap-table-scroll { max-height:560px;overflow:auto; }
+.ap-data-page table { min-width:max-content;width:100%; }
+.ap-data-page th { position:sticky;top:0;z-index:1; }
+.ap-missing-sheets { padding:15px 18px; }
+.ap-missing-sheets strong { color:#dce8fb;font-size:12px; }
+.ap-missing-sheets p { color:#9aacca;font-size:11px;margin:7px 0 0; }
+.ap-data-page .ap-empty { padding:30px 16px;line-height:1.6; }
+@media (max-width:640px) {
+  .ap-import-choice { align-items:flex-start;flex-direction:column; }
+  .ap-imported-counts>div { min-width:calc(50% - 8px); }
+  .ap-data-page .ap-panel-heading { align-items:flex-start; }
+}
