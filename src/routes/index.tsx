@@ -46,10 +46,11 @@ function calculate(rows: Row[], m: MapCols, statuses: string[]) {
   const counts = labels.map(sprint => {
     let throughput = 0;
     valid.filter(r => str(r[m.sprint]) === sprint).forEach(r => {
+      if (!done(r[m.status], statuses)) return;
       const id = m.item ? str(r[m.item]) : "";
       if (id && seen.has(id)) { duplicates++; return; }
       if (id) seen.add(id);
-      if (done(r[m.status], statuses)) throughput++;
+      throughput++;
     });
     return { sprint, throughput };
   });
