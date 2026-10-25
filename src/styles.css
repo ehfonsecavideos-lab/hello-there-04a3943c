@@ -464,3 +464,15 @@ body { margin:0; }
 .ap-risk-status.is-missing { background:#27364d;border:1px solid #405572;color:#b6c5dc; }
 @media(max-width:900px) { .ap-decision-scenario-grid { grid-template-columns:1fr; }.ap-decision-scenario>strong { font-size:23px; } }
 @media(max-width:640px) { .ap-decision-section { padding:13px; }.ap-decision-section .ap-panel-heading { align-items:flex-start;flex-direction:column; }.ap-decision-edit-grid { grid-template-columns:1fr; }.ap-decision-pill { white-space:normal; } }
+
+
+/* Executive summary and stakeholder communication */
+.ap-exec-page,.ap-communication-page { margin-top:14px;display:flex;flex-direction:column;gap:16px; }
+.ap-exec-section { padding:19px;min-width:0; }
+.ap-exec-sentences { display:flex;flex-direction:column;gap:10px;margin-top:12px; }
+.ap-exec-sentences>div { display:flex;align-items:flex-start;gap:12px;border:1px solid #2a3e5d;border-radius:11px;background:#101e33;padding:14px; }
+.ap-exec-sentences>div>span { flex:0 0 25px;height:25px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#1d3a5d;color:#bfdbfe;font-weight:800;font-size:11px; }
+.ap-exec-sentences p { margin:2px 0 0;color:#d6e1f3;font-size:11px;line-height:1.8; }
+.ap-exec-section .ap-decision-table { max-height:520px; }
+.ap-communication-page .ap-decision-table { max-height:560px; }
+@media(max-width:700px) { .ap-exec-section { padding:13px; }.ap-exec-section .ap-panel-heading { align-items:flex-start;flex-direction:column; } }
