@@ -180,12 +180,56 @@ function AgilePulse() {
   const quality=stats.noSprint+stats.noStatus+stats.noItem+stats.duplicates;
   async function parseFile(file: File) {
     setUploadError("");
+    setPending(null);
     try {
       const wb=XLSX.read(await file.arrayBuffer(),{type:"array",cellDates:true});
       if(!wb.SheetNames.length)throw new Error("O arquivo não contém abas legíveis.");
-      const parsed=XLSX.utils.sheet_to_json<Row>(wb.Sheets[wb.SheetNames[0]],{defval:"",raw:false});
-      if(!parsed.length)throw new Error("A aba está vazia ou não contém cabeçalho reconhecível.");
-      setFileName(file.name);setSheetNames(wb.SheetNames);setSheet(wb.SheetNames[0]);setPending(parsed);setMapping(guessMap(parsed));
+      const parsed: Row[]=[];
+      const allColumns=new Set<string>();
+      for(const sheetName of wb.SheetNames){
+        const ws=wb.Sheets[sheetName];
+        if(!ws)continue;
+        const sheetRows=XLSX.utils.sheet_to_json<Row>(ws,{defval:"",raw:false});
+        for(const row of sheetRows){
+          if(!Object.values(row).some(value=>String(value??"").trim()!==""))continue;
+          parsed.push({...row,"__Aba de origem":sheetName});
+          Object.keys(row).forEach(key=>allColumns.add(key));
+        }
+      }
+      if(!parsed.length)throw new Error("Nenhuma das abas contém linhas de dados com cabeçalhos reconhecíveis.");
+      const columns=[...allColumns];
+      const fallback=guessMap(parsed);
+      let detected=fallback;
+      let aiNote="";
+      try{
+        const response=await fetch("/api/ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          task:"organize",
+          question:"Identifique automaticamente as colunas equivalentes às métricas ágeis e retorne somente JSON válido.",
+          columns,
+          sheetNames:wb.SheetNames,
+          data:parsed.slice(0,120)
+        })});
+        const result=await response.json();
+        if(response.ok&&result.answer){
+          const cleaned=String(result.answer).replace(/^`{3}(?:json)?s*/i,"").replace(/s*`{3}$/,"");
+          const inferred=JSON.parse(cleaned);
+          const valid=(value:unknown)=>typeof value==="string"&&columns.includes(value);
+          detected={
+            sprint:valid(inferred.sprint)?inferred.sprint:fallback.sprint,
+            item:valid(inferred.item)?inferred.item:fallback.item,
+            status:valid(inferred.status)?inferred.status:fallback.status,
+            squad:valid(inferred.squad)?inferred.squad:fallback.squad,
+            created:valid(inferred.created)?inferred.created:fallback.created,
+            started:valid(inferred.started)?inferred.started:fallback.started,
+            completed:valid(inferred.completed)?inferred.completed:fallback.completed,
+            storyPoints:valid(inferred.storyPoints)?inferred.storyPoints:fallback.storyPoints
+          };
+        }else aiNote=" A importação foi concluída com reconhecimento automático local porque a IA não estava disponível.";
+      }catch{aiNote=" A importação foi concluída com reconhecimento automático local porque a IA não respondeu.";}
+      setFileName(file.name);setSheetNames(wb.SheetNames);setSheet(wb.SheetNames[0]);
+      setRows(parsed);setMapping(detected);setSource("imported");setPending(null);setEditorOpen(false);setFilter("Todas as sprints");
+      setUploadError("Importação automática concluída: "+parsed.length+" linhas em "+wb.SheetNames.length+" abas e "+columns.length+" colunas reconhecidas."+aiNote);
+      setSourceOpen(true);
     } catch(e) {setPending(null);setUploadError(e instanceof Error?e.message:"Não foi possível processar o arquivo.");}
   }
   async function changeSheet(name: string) {
@@ -204,14 +248,14 @@ function AgilePulse() {
     <aside className="ap-sidebar"><div className="ap-nav-label">NAVEGAÇÃO</div><button className="ap-nav active"><Activity size={18}/> Dashboard</button><button className={"ap-nav "+(sourceOpen?"active":"")} onClick={()=>setSourceOpen(v=>!v)}><Database size={18}/> Fontes de Dados <ChevronDown className="ap-nav-end" size={15}/></button><div className="ap-sidebar-bottom"><i/> <div><strong>Fonte de dados</strong><span>{source==="demo"?"Dados demonstrativos":"Arquivo importado"}</span></div></div></aside>
     <section className="ap-main">
     <div className="ap-content"><div className="ap-page-heading"><div><div className="ap-eyebrow">MÉTRICAS DE FLUXO</div><h1>Throughput <span className="ap-live-pill"><i/>{source==="demo"?"Demonstração":"Dados importados"}</span></h1><p>Acompanhe o ritmo de entrega e explore os itens concluídos por sprint.</p></div><button className="ap-button ap-secondary" onClick={()=>setSourceOpen(v=>!v)}><FileUp size={17}/> Importar dados</button></div>
-    {sourceOpen&&<section className="ap-panel ap-import"><div className="ap-panel-heading"><div><h2>Fontes de Dados</h2><p>Excel ou CSV · revise o mapeamento antes de importar.</p></div><button className="ap-icon-button" onClick={()=>{setSourceOpen(false);setPending(null);}}><X size={18}/></button></div>
+    {sourceOpen&&<section className="ap-panel ap-import"><div className="ap-panel-heading"><div><h2>Fontes de Dados</h2><p>Excel ou CSV · a IA identifica os campos e importa automaticamente todas as abas.</p></div><button className="ap-icon-button" onClick={()=>{setSourceOpen(false);setPending(null);}}><X size={18}/></button></div>
     <div className="ap-dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f)void parseFile(f);}}><FileUp size={26}/><strong>Selecione sua planilha</strong><span>Arraste o arquivo ou escolha no computador</span><small>.xlsx · .xls · .csv</small><input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={e=>{const f=e.target.files?.[0];if(f)void parseFile(f);}}/><button className="ap-button ap-primary" onClick={()=>fileRef.current?.click()}>Escolher arquivo</button></div>
     {uploadError&&<div className="ap-error"><AlertCircle size={16}/>{uploadError}</div>}
     {pending&&<div className="ap-mapping"><div className="ap-file-info"><FileSpreadsheet size={20}/><div><strong>{fileName}</strong><span>{pending.length} linhas · {headers.length} colunas · prévia</span></div></div>{sheetNames.length>1&&<label className="ap-field">Aba do Excel<select value={sheet} onChange={e=>void changeSheet(e.target.value)}>{sheetNames.map(n=><option key={n}>{n}</option>)}</select></label>}
     <div className="ap-mapping-grid">{([{key:"sprint",label:"Sprint *"},{key:"item",label:"Identificador do item"},{key:"status",label:"Status *"},{key:"squad",label:"Squad (opcional)"},{key:"created",label:"Data de criação (Lead Time)"},{key:"started",label:"Data de início (Cycle Time)"},{key:"completed",label:"Data de conclusão (Lead/Cycle Time)"},{key:"storyPoints",label:"Story Points (Velocity)"}] as const).map(f=><label className="ap-field" key={f.key}>{f.label}<select value={mapping[f.key]} onChange={e=>setMapping(m=>({...m,[f.key]:e.target.value}))}><option value="">Não selecionada</option>{headers.map(h=><option key={h}>{h}</option>)}</select></label>)}</div>
     <label className="ap-field">Status que representam conclusão (separados por vírgula)<input value={statusText} onChange={e=>setStatusText(e.target.value)}/></label><div className="ap-preview"><strong>Prévia dos dados</strong><div className="ap-table-scroll"><table><thead><tr>{headers.slice(0,7).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{pending.slice(0,5).map((r,i)=><tr key={i}>{headers.slice(0,7).map(h=><td key={h}>{str(r[h])||"—"}</td>)}</tr>)}</tbody></table></div></div>
     <div className="ap-import-actions"><button className="ap-button ap-secondary" onClick={()=>{setPending(null);setUploadError("");}}>Cancelar</button><button className="ap-button ap-primary" onClick={confirmImport}><Check size={16}/> Confirmar importação</button></div></div>}
-    <p className="ap-note">O arquivo é processado no navegador e não é salvo em banco compartilhado.</p></section>}
+    <p className="ap-note">Todas as abas e linhas são processadas no navegador; a IA ajuda a identificar as colunas. O arquivo não é salvo em banco compartilhado.</p></section>}
     <div className="ap-source-strip"><div className="ap-source-icon"><Database size={18}/></div><div><strong>{source==="demo"?"Dados demonstrativos (fictícios)":fileName}</strong><span>{source==="demo"?"Exemplo ilustrativo · não representa dados reais":"Dados ativos nesta sessão do navegador"}</span></div><div className="ap-source-state"><Check size={13}/>{source==="demo"?"Exemplo ativo":"Importação confirmada"} <button onClick={()=>setSourceOpen(true)}>Gerenciar</button></div><button className="ap-button ap-secondary ap-edit-toggle" onClick={()=>setEditorOpen(v=>!v)}><FileSpreadsheet size={15}/>{editorOpen?"Ocultar dados":"Visualizar e editar dados"}</button></div>
     {editorOpen&&<section className="ap-panel ap-data-editor"><div className="ap-panel-heading"><div><div><h2>Dados carregados</h2><p>Edite qualquer célula. Os gráficos e indicadores são recalculados automaticamente.</p></div></div><button className="ap-icon-button" onClick={()=>setEditorOpen(false)} aria-label="Fechar editor"><X size={18}/></button></div><div className="ap-editor-meta">{rows.length} linhas · {Object.keys(rows[0]||{}).length} colunas · alterações aplicadas em tempo real</div><div className="ap-table-scroll ap-edit-table"><table><thead><tr>{Object.keys(rows[0]||{}).map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((row,rowIndex)=><tr key={rowIndex}>{Object.keys(rows[0]||{}).map(column=><td key={column}><input aria-label={`Linha ${rowIndex+1}, ${column}`} title={`${column} · linha ${rowIndex+1}`} value={str(row[column])} onChange={e=>updateCell(rowIndex,column,e.target.value)}/></td>)}</tr>)}</tbody></table></div><p className="ap-note"><AlertCircle size={14}/>As edições ficam nesta sessão do navegador. Para manter alterações fora desta sessão, exporte ou salve os dados em um arquivo.</p></section>}
     <section className="ap-chart-card"><div className="ap-chart-heading"><div><div className="ap-chart-title"><Activity size={20}/><h2>Itens concluídos por sprint</h2></div><p>Quantidade de itens que atingiram um status de conclusão em cada sprint.</p></div></div>
