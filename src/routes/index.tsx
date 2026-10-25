@@ -211,17 +211,18 @@ function inclusiveP85(values:number[]):number|null {
   return sorted[lo]+(sorted[hi]-sorted[lo])*(pos-lo);
 }
 function numeric(v:unknown):number|null { const n=Number(str(v).replace(",","."));return str(v)!==""&&Number.isFinite(n)?n:null; }
+function isCompletedRow(r:Row):boolean { return !!str(r["Concluído"]) || (str(r["Issue Status"]) ? completedDefaults.some(s=>normalize(s)===normalize(r["Issue Status"])) : !!str(r["Resolution Date"])); }
 function buildFlowSeries(rows:Row[], calendar:Row[]) {
   const eventBySprint=new Map(calendar.map(r=>[str(r["Sprint"]),r]));
-  const allLead=rows.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
+  const allLead=rows.filter(isCompletedRow).map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
   const overallP85=inclusiveP85(allLead);
   return SPRINT_OPTIONS.map((sprint,i)=>{
     const items=rows.filter(r=>str(r["Sprint"])===sprint);
-    const completed=items.filter(r=>!!str(r["Concluído"]||r["Resolution Date"])||completedDefaults.some(s=>normalize(s)===normalize(r["Issue Status"])));
-    const leadValues=items.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
-    const cycleValues=items.map(r=>numeric(r["Cycle time (dias corridos)"])??elapsedDays(r["In development"]??r["Development Start Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
-    const noReopen=items.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
-    const reopened=items.filter(r=>(numeric(r["Reaberturas"])??0)>0).length;
+    const completed=items.filter(isCompletedRow);
+    const leadValues=completed.map(r=>numeric(r["Lead time (dias corridos)"])??elapsedDays(r["Criado"]??r["Created Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
+    const cycleValues=completed.map(r=>numeric(r["Cycle time (dias corridos)"])??elapsedDays(r["In development"]??r["Development Start Date"],r["Concluído"]??r["Resolution Date"])).filter((v):v is number=>v!==null&&v>=0);
+    const noReopen=completed.filter(r=>(numeric(r["Reaberturas"])??0)===0).length;
+    const reopened=completed.filter(r=>(numeric(r["Reaberturas"])??0)>0).length;
     const lead=leadValues.length?leadValues.reduce((a,b)=>a+b,0)/leadValues.length:null;
     const cycle=cycleValues.length?cycleValues.reduce((a,b)=>a+b,0)/cycleValues.length:null;
     const velocity=completed.reduce((sum,r)=>sum+(numeric(r["Story Points"])??0),0);
